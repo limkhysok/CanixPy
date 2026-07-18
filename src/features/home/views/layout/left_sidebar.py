@@ -32,10 +32,10 @@ QLabel#navButtonIcon {{
 
 NAV_ITEMS = [
     ("fa5s.home", "Home"),
-    ("fa5s.folder", "Projects"),
+    ("fa5.folder", "Projects"),
 ]
 
-ICON_SIZE = QSize(20, 20)
+ICON_SIZE = QSize(18, 18)
 ROW_MARGIN_V = 8
 ROW_MARGIN_H_EXPANDED = 14
 ROW_MARGIN_H_COLLAPSED = 0  # tight enough to center the icon within LeftSidebar.COLLAPSED_WIDTH
