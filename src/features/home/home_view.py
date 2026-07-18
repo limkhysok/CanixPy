@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QWidget
 
 from src.features.home.home_page import HomePage
 from src.features.home.home_viewmodel import HomeViewModel
-from src.features.home.layout.nav_sidebar import NavSidebar
+from src.features.home.layout.left_sidebar import LeftSidebar
 from src.features.home.projects_page import ProjectsPage
 
 
@@ -22,9 +22,9 @@ class HomeView(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        self.nav_sidebar = NavSidebar()
-        self.nav_sidebar.page_selected.connect(self._on_page_selected)
-        layout.addWidget(self.nav_sidebar)
+        self.left_sidebar = LeftSidebar()
+        self.left_sidebar.page_selected.connect(self._on_page_selected)
+        layout.addWidget(self.left_sidebar)
 
         self.pages = QStackedWidget()
         layout.addWidget(self.pages, 1)
