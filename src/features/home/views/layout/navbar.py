@@ -22,14 +22,15 @@ QPushButton#toggleButton:hover {{
 
 
 class Navbar(QWidget):
-    """Header strip at the top of the left sidebar holding the collapse/expand toggle."""
+    """Header strip above the content area holding the sidebar collapse/expand toggle."""
 
-    toggle_clicked = Signal()
+    toggle_clicked = Signal(bool)  # emits the new collapsed state
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(NAVBAR_STYLE)
+        self._collapsed = False
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -39,14 +40,16 @@ class Navbar(QWidget):
         self.toggle_button.setIcon(icons.icon("fa5s.angle-left", color=theme.TEXT_PRIMARY))
         self.toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.toggle_button.setToolTip("Collapse sidebar")
-        self.toggle_button.clicked.connect(self.toggle_clicked.emit)
+        self.toggle_button.clicked.connect(self._on_toggle_clicked)
         layout.addWidget(self.toggle_button)
         layout.setAlignment(self.toggle_button, Qt.AlignmentFlag.AlignLeft)
 
+    def _on_toggle_clicked(self) -> None:
+        self.set_collapsed(not self._collapsed)
+        self.toggle_clicked.emit(self._collapsed)
+
     def set_collapsed(self, collapsed: bool) -> None:
+        self._collapsed = collapsed
         icon_name = "fa5s.angle-right" if collapsed else "fa5s.angle-left"
         self.toggle_button.setIcon(icons.icon(icon_name, color=theme.TEXT_PRIMARY))
         self.toggle_button.setToolTip("Expand sidebar" if collapsed else "Collapse sidebar")
-
-        alignment = Qt.AlignmentFlag.AlignHCenter if collapsed else Qt.AlignmentFlag.AlignLeft
-        self.layout().setAlignment(self.toggle_button, alignment)

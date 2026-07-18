@@ -19,6 +19,7 @@ from src.core import icons, theme
 from src.features.home.models.models import Project
 from src.features.home.viewmodels.home_viewmodel import HomeViewModel
 from src.features.home.views.layout.left_sidebar import LeftSidebar
+from src.features.home.views.layout.navbar import Navbar
 from src.features.home.views.widgets.canvas_size_dialog import CanvasSizeDialog
 
 CONTENT_STYLE = f"""
@@ -71,8 +72,19 @@ class HomeView(QWidget):
         self.left_sidebar.page_selected.connect(self._on_page_selected)
         layout.addWidget(self.left_sidebar)
 
+        content_column = QWidget()
+        content_layout = QVBoxLayout(content_column)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
+        self.navbar = Navbar()
+        self.navbar.toggle_clicked.connect(self.left_sidebar.set_collapsed)
+        content_layout.addWidget(self.navbar)
+
         self.pages = QStackedWidget()
-        layout.addWidget(self.pages, 1)
+        content_layout.addWidget(self.pages, 1)
+
+        layout.addWidget(content_column, 1)
 
         self.home_page = self._build_home_page()
         self.pages.addWidget(self.home_page)
