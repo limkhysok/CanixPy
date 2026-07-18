@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 
 from src.features.editor.editor_view import CoreDesignApp
-from src.features.home.home_view import HomeView
+from src.features.home.views.home_view import HomeView
 
 
 class App(QMainWindow):

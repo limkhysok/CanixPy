@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.features.home.models import Project, Task
+from src.features.home.models.models import Project, Task
 
 
 @dataclass(frozen=True)

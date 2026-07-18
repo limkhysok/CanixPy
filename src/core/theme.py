@@ -1,21 +1,23 @@
 """Central design tokens for CanixPy's light theme.
 
-Concept: white background, Burnt Orange / Rust as the single accent color.
-Buttons that should get the accent treatment opt in via the Qt dynamic
-property `accent`, e.g. `button.setProperty("accent", True)`.
+Concept: white background, Sage Green as the single accent color -- a
+muted, earthy gray-green inspired by the silvery-green leaves of the
+Mediterranean sage plant. Buttons that should get the accent treatment
+opt in via the Qt dynamic property `accent`, e.g.
+`button.setProperty("accent", True)`.
 """
 from __future__ import annotations
 
 # Backgrounds
 BACKGROUND = "#FFFFFF"
-SURFACE = "#FAF6F4"  # warm off-white, used for side panels/hover states
+SURFACE = "#FFFFFF"  # used for side panels/hover states
 BORDER = "#E8E1DC"
 
-# Brand / accent -- Burnt Orange / Rust
-ACCENT = "#C1440E"
-ACCENT_HOVER = "#A83A0C"
-ACCENT_PRESSED = "#8F310A"
-ACCENT_LIGHT = "#F3DED3"  # light tint for subtle selected/hover backgrounds
+# Brand / accent -- Sage Green
+ACCENT = "#8A9A76"
+ACCENT_HOVER = "#748563"
+ACCENT_PRESSED = "#5F7050"
+ACCENT_LIGHT = "#E6EBDD"  # light tint for subtle selected/hover backgrounds
 
 # Text
 TEXT_PRIMARY = "#2B2320"

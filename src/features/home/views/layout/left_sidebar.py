@@ -4,7 +4,7 @@ from PySide6.QtCore import QSize, Signal, Qt
 from PySide6.QtWidgets import QButtonGroup, QPushButton, QVBoxLayout, QWidget
 
 from src.core import icons, theme
-from src.features.home.layout.navbar import Navbar
+from src.features.home.views.layout.navbar import Navbar
 
 LEFT_SIDEBAR_STYLE = f"""
 LeftSidebar {{
@@ -15,10 +15,10 @@ QPushButton#navButton {{
     background-color: transparent;
     border: none;
     border-radius: 8px;
-    padding: 9px 12px;
+    padding: 11px 14px;
     text-align: left;
     color: {theme.TEXT_PRIMARY};
-    font-size: 13px;
+    font-size: 15px;
     font-weight: 500;
 }}
 QPushButton#navButton:hover {{
@@ -36,7 +36,7 @@ NAV_ITEMS = [
     ("fa5s.folder", "Projects"),
 ]
 
-ICON_SIZE = QSize(17, 17)
+ICON_SIZE = QSize(20, 20)
 
 
 class LeftSidebar(QWidget):
@@ -44,8 +44,8 @@ class LeftSidebar(QWidget):
 
     page_selected = Signal(str)  # "home" | "projects"
 
-    EXPANDED_WIDTH = 208
-    COLLAPSED_WIDTH = 64
+    EXPANDED_WIDTH = 232
+    COLLAPSED_WIDTH = 68
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -63,7 +63,7 @@ class LeftSidebar(QWidget):
 
         nav_layout = QVBoxLayout()
         nav_layout.setContentsMargins(8, 8, 8, 8)
-        nav_layout.setSpacing(2)
+        nav_layout.setSpacing(4)
 
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)

@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.features.home.home_viewmodel import CanvasPreset, HomeViewModel
+from src.features.home.viewmodels.home_viewmodel import CanvasPreset, HomeViewModel
 
 
 class CanvasSizeDialog(QDialog):
