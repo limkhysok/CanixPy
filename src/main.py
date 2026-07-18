@@ -1,4 +1,4 @@
-from src.views.main_window import CoreDesignApp
+from src.features.editor.editor_view import CoreDesignApp
 
 
 def main() -> None:

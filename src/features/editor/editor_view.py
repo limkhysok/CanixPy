@@ -1,9 +1,9 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QComboBox, QLabel, QFileDialog
-from src.models.scene import DesignScene
-from src.views.canvas_view import ZoomableGraphicsView
-from src.views.sidebar_left import LeftSidebar
-from src.views.sidebar_right import PropertiesPanel
-from src.viewmodels.exporter import export_scene_to_png
+from src.features.editor.canvas.scene import DesignScene
+from src.features.editor.canvas.view import ZoomableGraphicsView
+from src.features.editor.sidebar_left import LeftSidebar
+from src.features.editor.sidebar_right import PropertiesPanel
+from src.features.editor.exporter import export_scene_to_png
 
 class CoreDesignApp(QMainWindow):
     def __init__(self) -> None:

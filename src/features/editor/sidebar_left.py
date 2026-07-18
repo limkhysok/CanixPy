@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
 from PySide6.QtGui import QDrag
 
 if TYPE_CHECKING:
-    from src.views.main_window import CoreDesignApp
+    from src.features.editor.editor_view import CoreDesignApp
 
 class DraggableListWidget(QListWidget):
     def __init__(self, parent: QWidget | None = None) -> None:

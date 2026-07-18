@@ -3,10 +3,10 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QFontComboBox, QSpinBox
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsItem
 from PySide6.QtGui import QFont
-from src.viewmodels.properties_viewmodel import PropertiesPanelViewModel
+from src.features.editor.properties_viewmodel import PropertiesPanelViewModel
 
 if TYPE_CHECKING:
-    from src.views.main_window import CoreDesignApp
+    from src.features.editor.editor_view import CoreDesignApp
 
 class PropertiesPanel(QWidget):
     def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:

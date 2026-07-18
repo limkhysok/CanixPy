@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QBrush, QColor, QFont
 
 if TYPE_CHECKING:
-    from src.views.main_window import CoreDesignApp
+    from src.features.editor.editor_view import CoreDesignApp
 
 class DesignScene(QGraphicsScene):
     def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:

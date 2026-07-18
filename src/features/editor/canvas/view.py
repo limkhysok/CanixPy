@@ -3,10 +3,10 @@ from typing import TYPE_CHECKING, cast
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QWidget
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QWheelEvent, QKeyEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent
-from src.models.scene import DesignScene
+from src.features.editor.canvas.scene import DesignScene
 
 if TYPE_CHECKING:
-    from src.views.main_window import CoreDesignApp
+    from src.features.editor.editor_view import CoreDesignApp
 
 class ZoomableGraphicsView(QGraphicsView):
     def __init__(self, scene: QGraphicsScene, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
