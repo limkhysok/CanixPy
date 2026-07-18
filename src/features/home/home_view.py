@@ -1,25 +1,47 @@
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+from __future__ import annotations
+
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QWidget
+
+from src.features.home.home_page import HomePage
+from src.features.home.home_viewmodel import HomeViewModel
+from src.features.home.layout.nav_sidebar import NavSidebar
+from src.features.home.projects_page import ProjectsPage
 
 
 class HomeView(QWidget):
-    """The Home Screen: templates and recent designs."""
+    """The Home Screen: a left nav (Home / Projects) plus the active page."""
 
-    open_editor = Signal()
+    open_editor = Signal(int, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.viewmodel = HomeViewModel()
 
-        layout = QVBoxLayout(self)
-        layout.addStretch()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        title = QLabel("<h1>CanixPy</h1>")
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(title)
+        self.nav_sidebar = NavSidebar()
+        self.nav_sidebar.page_selected.connect(self._on_page_selected)
+        layout.addWidget(self.nav_sidebar)
 
-        btn_new_design = QPushButton("+ New Design")
-        btn_new_design.setFixedWidth(200)
-        btn_new_design.clicked.connect(self.open_editor.emit)
-        layout.addWidget(btn_new_design, alignment=Qt.AlignmentFlag.AlignHCenter)
+        self.pages = QStackedWidget()
+        layout.addWidget(self.pages, 1)
 
-        layout.addStretch()
+        self.home_page = HomePage(self.viewmodel)
+        self.home_page.open_editor.connect(self.open_editor.emit)
+        self.pages.addWidget(self.home_page)
+
+        self.projects_page = ProjectsPage(self.viewmodel)
+        self.pages.addWidget(self.projects_page)
+
+        self.pages.setCurrentWidget(self.home_page)
+
+    def _on_page_selected(self, page_name: str) -> None:
+        if page_name == "projects":
+            self.projects_page.refresh()
+            self.pages.setCurrentWidget(self.projects_page)
+        else:
+            self.home_page.refresh()
+            self.pages.setCurrentWidget(self.home_page)

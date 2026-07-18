@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QFontComboBox, QSpinBox
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsItem
 from PySide6.QtGui import QFont
+from src.core import icons
 from src.features.editor.properties_viewmodel import PropertiesPanelViewModel
 
 if TYPE_CHECKING:
@@ -35,7 +36,7 @@ class PropertiesPanel(QWidget):
 
         # 1. Custom settings depending on type
         if isinstance(item, (QGraphicsRectItem, QGraphicsEllipseItem)):
-            btn_color = QPushButton("Change Color")
+            btn_color = QPushButton(icons.icon("fa5s.palette"), "Change Color")
             btn_color.clicked.connect(lambda: self.viewmodel.change_shape_color(item))
             self.main_layout.addWidget(QLabel("Shape Styling:"))
             self.main_layout.addWidget(btn_color)
@@ -60,7 +61,7 @@ class PropertiesPanel(QWidget):
             size_box.valueChanged.connect(on_size_changed)
             self.main_layout.addWidget(size_box)
 
-            btn_color = QPushButton("Text Color")
+            btn_color = QPushButton(icons.icon("fa5s.palette"), "Text Color")
             btn_color.clicked.connect(lambda: self.viewmodel.change_text_color(item))
             self.main_layout.addWidget(btn_color)
 
@@ -68,10 +69,10 @@ class PropertiesPanel(QWidget):
         self.main_layout.addSpacing(15)
         self.main_layout.addWidget(QLabel("<b>Arrangement</b>"))
 
-        btn_front = QPushButton("Bring to Front")
+        btn_front = QPushButton(icons.icon("fa5s.arrow-up"), "Bring to Front")
         btn_front.clicked.connect(lambda: self.main_app.scene.bring_to_front(item))
         self.main_layout.addWidget(btn_front)
 
-        btn_back = QPushButton("Send to Back")
+        btn_back = QPushButton(icons.icon("fa5s.arrow-down"), "Send to Back")
         btn_back.clicked.connect(lambda: self.main_app.scene.send_to_back(item))
         self.main_layout.addWidget(btn_back)

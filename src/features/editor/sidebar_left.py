@@ -3,9 +3,16 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QLabel, QFileDialog
 from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
 from PySide6.QtGui import QDrag
+from src.core import icons
 
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
+
+SHAPE_ICONS = {
+    "Rectangle": "fa5s.square",
+    "Circle": "fa5s.circle",
+    "Text Box": "fa5s.font",
+}
 
 class DraggableListWidget(QListWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -16,7 +23,7 @@ class DraggableListWidget(QListWidget):
         self.add_shape_item("Text Box")
 
     def add_shape_item(self, text: str) -> None:
-        item = QListWidgetItem(text, self)
+        item = QListWidgetItem(icons.icon(SHAPE_ICONS[text]), text, self)
         item.setSizeHint(QSize(80, 40))
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -44,7 +51,7 @@ class LeftSidebar(QWidget):
         layout.addSpacing(10)
         layout.addWidget(QLabel("<b>Media Assets</b>"))
         
-        btn_upload = QPushButton("📷 Upload Image")
+        btn_upload = QPushButton(icons.icon("fa5s.image"), "Upload Image")
         btn_upload.clicked.connect(self.trigger_image_upload)
         layout.addWidget(btn_upload)
 

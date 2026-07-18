@@ -21,8 +21,11 @@ class App(QMainWindow):
         self.home_view.open_editor.connect(self.show_editor)
         self.stack.addWidget(self.home_view)
 
-    def show_editor(self) -> None:
-        if self.editor_view is None:
-            self.editor_view = CoreDesignApp()
-            self.stack.addWidget(self.editor_view)
+    def show_editor(self, width: int = 800, height: int = 600) -> None:
+        if self.editor_view is not None:
+            self.stack.removeWidget(self.editor_view)
+            self.editor_view.deleteLater()
+
+        self.editor_view = CoreDesignApp((width, height))
+        self.stack.addWidget(self.editor_view)
         self.stack.setCurrentWidget(self.editor_view)

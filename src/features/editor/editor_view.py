@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QComboBox, QLabel, QFileDialog
+from src.core import icons, theme
 from src.features.editor.canvas.scene import DesignScene
 from src.features.editor.canvas.view import ZoomableGraphicsView
 from src.features.editor.sidebar_left import LeftSidebar
@@ -6,11 +7,12 @@ from src.features.editor.sidebar_right import PropertiesPanel
 from src.features.editor.exporter import export_scene_to_png
 
 class CoreDesignApp(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, canvas_size: tuple[int, int] = (800, 600)) -> None:
         super().__init__()
         self.setWindowTitle("Native Python Design Studio v3")
         self.setGeometry(100, 100, 1300, 800)
 
+        self.canvas_size = canvas_size
         self.pages: dict[int, DesignScene] = {}
         self.current_page_index: int = 1
 
@@ -26,18 +28,19 @@ class CoreDesignApp(QMainWindow):
         toolbar = QHBoxLayout()
         self.page_selector = QComboBox()
         self.page_selector.currentIndexChanged.connect(self.on_page_combo_changed)
-        btn_add_page = QPushButton("+ Add Page")
+        btn_add_page = QPushButton(icons.icon("fa5s.plus"), "Add Page")
         btn_add_page.clicked.connect(self.add_new_page)
 
-        btn_zoom_in = QPushButton("Zoom In (+)")
-        btn_zoom_out = QPushButton("Zoom Out (-)")
-        btn_zoom_reset = QPushButton("Reset")
+        btn_zoom_in = QPushButton(icons.icon("fa5s.search-plus"), "Zoom In")
+        btn_zoom_out = QPushButton(icons.icon("fa5s.search-minus"), "Zoom Out")
+        btn_zoom_reset = QPushButton(icons.icon("fa5s.undo"), "Reset")
         btn_zoom_in.clicked.connect(self.zoom_in)
         btn_zoom_out.clicked.connect(self.zoom_out)
         btn_zoom_reset.clicked.connect(self.zoom_reset)
 
         # NEW EXPORT BUTTON
-        btn_export = QPushButton("💾 Export PNG")
+        btn_export = QPushButton(icons.icon("fa5s.file-export", color=theme.TEXT_ON_ACCENT), "Export PNG")
+        btn_export.setProperty("accent", True)
         btn_export.clicked.connect(self.export_page_to_png)
 
         toolbar.addWidget(QLabel("Pages:"))
@@ -91,7 +94,7 @@ class CoreDesignApp(QMainWindow):
 
     def switch_to_page(self, page_num: int) -> None:
         if page_num not in self.pages:
-            self.pages[page_num] = DesignScene(self)
+            self.pages[page_num] = DesignScene(self, *self.canvas_size)
             if self.page_selector.count() < page_num:
                 self.page_selector.addItem(f"Page {page_num}", page_num)
 
@@ -115,4 +118,5 @@ class CoreDesignApp(QMainWindow):
         if not file_path:
             return
 
-        export_scene_to_png(self.scene, file_path)
+        width, height = self.canvas_size
+        export_scene_to_png(self.scene, file_path, width, height)

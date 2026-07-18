@@ -8,16 +8,24 @@ if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
 
 class DesignScene(QGraphicsScene):
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
-        super().__init__(0, 0, 800, 600, parent)
+    def __init__(
+        self,
+        main_app: "CoreDesignApp",
+        width: int = 800,
+        height: int = 600,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(0, 0, width, height, parent)
         self.main_app = main_app
+        self.width_px = width
+        self.height_px = height
         self.setBackgroundBrush(QBrush(QColor("#ffffff")))
         self.create_page_boundary()
         self.selectionChanged.connect(self.main_app.update_properties_panel)
 
     def create_page_boundary(self) -> None:
         # We assign a very low fixed zValue so background frames don't intercept mouse clicks
-        self.page_frame = self.addRect(0, 0, 800, 600)
+        self.page_frame = self.addRect(0, 0, self.width_px, self.height_px)
         self.page_frame.setPen(QColor("#cccccc"))
         self.page_frame.setZValue(-1000)
 
