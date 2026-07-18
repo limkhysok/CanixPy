@@ -1,12 +1,10 @@
-from src.features.editor.editor_view import CoreDesignApp
-
+import sys
+from PySide6.QtWidgets import QApplication
+from src.features.app import App
 
 def main() -> None:
-    import sys
-    from PySide6.QtWidgets import QApplication
-
     app = QApplication(sys.argv)
-    window = CoreDesignApp()
+    window = App()
     window.show()
     sys.exit(app.exec())
 
