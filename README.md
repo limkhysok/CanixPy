@@ -17,6 +17,17 @@ Instead of waiting for heavy browser engines to load, managing cloud accounts, o
 
 ---
 
+## 🚀 Running the App
+
+Install dependencies, then launch from the project root:
+
+```bash
+pip install -r requirements.txt
+python -m src.main
+```
+
+---
+
 ## ⚖️ License
 
 This project is licensed under the **GNU General Public License v3.0** (GPL-3.0) to align with the open-source PyQt ecosystem while keeping this tool free and accessible for everyone.
