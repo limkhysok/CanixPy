@@ -1,3 +1,4 @@
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 
 from src.features.editor.editor_view import CoreDesignApp
@@ -21,11 +22,15 @@ class App(QMainWindow):
         self.home_view.open_editor.connect(self.show_editor)
         self.stack.addWidget(self.home_view)
 
-    def show_editor(self, width: int = 800, height: int = 600) -> None:
+    def show_editor(self, width: int = 800, height: int = 600, image_path: str = "") -> None:
         if self.editor_view is not None:
             self.stack.removeWidget(self.editor_view)
             self.editor_view.deleteLater()
 
         self.editor_view = CoreDesignApp((width, height))
+        if image_path:
+            center = QPointF(width / 2, height / 2)
+            self.editor_view.scene.add_image_item(image_path, center)
+
         self.stack.addWidget(self.editor_view)
         self.stack.setCurrentWidget(self.editor_view)

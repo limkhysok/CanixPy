@@ -45,7 +45,7 @@ QListWidget::item {{
 class HomeView(QWidget):
     """The Home Screen shell: left nav (Home / Projects / ...) plus the active page."""
 
-    open_editor = Signal(int, int)
+    open_editor = Signal(int, int, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

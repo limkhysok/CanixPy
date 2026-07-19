@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+from PySide6.QtGui import QImageReader
 
 from src.features.home.models.models import Project, Task
 
@@ -41,6 +44,27 @@ class HomeViewModel:
 
     def add_task(self, name: str, canvas_size: tuple[int, int]) -> Task:
         task = Task(name=name, canvas_size=canvas_size)
+        self.tasks.append(task)
+        return task
+
+    def import_task(self, file_path: str) -> Task | None:
+        """Create a task from a user-picked image file, sized to the image's
+        own dimensions. Returns None if the file isn't a readable image."""
+        reader = QImageReader(file_path)
+        size = reader.size()
+        if not size.isValid():
+            return None
+
+        original_filename = os.path.basename(file_path)
+        name, extension = os.path.splitext(original_filename)
+        task = Task(
+            name=name or original_filename,
+            canvas_size=(size.width(), size.height()),
+            file_path=file_path,
+            original_filename=original_filename,
+            file_type=extension.lstrip(".").lower(),
+            file_size=os.path.getsize(file_path),
+        )
         self.tasks.append(task)
         return task
 

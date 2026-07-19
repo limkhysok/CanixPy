@@ -11,7 +11,9 @@ def _new_id() -> str:
 
 @dataclass
 class Task:
-    """A single design/work item, e.g. one canvas the user has created."""
+    """A single design/work item: either a blank canvas or an imported image
+    file the user is editing/customizing. Imported tasks carry file metadata;
+    blank canvases leave those fields None."""
 
     name: str
     canvas_size: tuple[int, int]
@@ -19,6 +21,14 @@ class Task:
     project_id: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
     modified_at: datetime = field(default_factory=datetime.now)
+    file_path: str | None = None
+    original_filename: str | None = None
+    file_type: str | None = None
+    file_size: int | None = None
+
+    @property
+    def is_imported(self) -> bool:
+        return self.file_path is not None
 
 
 @dataclass

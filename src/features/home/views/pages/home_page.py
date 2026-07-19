@@ -5,9 +5,12 @@ from datetime import datetime
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QVBoxLayout,
@@ -61,6 +64,9 @@ QLabel#recentCardMeta {{
 """
 
 TASK_ICON = "fa5s.file-alt"
+IMPORTED_TASK_ICON = "fa5s.image"
+IMAGE_FILE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
+IMPORT_IMAGE_LABEL = "Import Image"
 
 RECENT_THUMBNAIL_HEIGHT = 64
 RECENT_CARD_HEIGHT = 162
@@ -109,7 +115,8 @@ class _RecentTaskCard(QWidget):
         self.thumbnail.setObjectName("recentThumbnail")
         self.thumbnail.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.thumbnail.setMinimumHeight(RECENT_THUMBNAIL_HEIGHT)
-        self.thumbnail.setPixmap(icons.icon(TASK_ICON, color=theme.ACCENT).pixmap(28, 28))
+        thumbnail_icon = IMPORTED_TASK_ICON if task.is_imported else TASK_ICON
+        self.thumbnail.setPixmap(icons.icon(thumbnail_icon, color=theme.ACCENT).pixmap(28, 28))
         layout.addWidget(self.thumbnail)
         layout.addSpacing(8)
 
@@ -165,7 +172,8 @@ def _format_relative_time(when: datetime) -> str:
 class HomePage(QWidget):
     """The Home page: New Design button plus a grid of recent-task cards."""
 
-    open_editor = Signal(int, int)
+    # width, height, image_path -- image_path is "" for a blank New Design canvas.
+    open_editor = Signal(int, int, str)
 
     def __init__(self, viewmodel: HomeViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -181,12 +189,25 @@ class HomePage(QWidget):
         title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(title)
 
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+
         btn_new_design = QPushButton(icons.icon("fa5s.plus", color=theme.TEXT_ON_ACCENT), "New Design")
         btn_new_design.setProperty("accent", True)
         btn_new_design.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_new_design.setFixedWidth(200)
         btn_new_design.clicked.connect(self._on_new_design)
-        layout.addWidget(btn_new_design, alignment=Qt.AlignmentFlag.AlignHCenter)
+        button_row.addWidget(btn_new_design)
+
+        btn_import_image = QPushButton(icons.icon("fa5s.file-image", color=theme.TEXT_ON_ACCENT), IMPORT_IMAGE_LABEL)
+        btn_import_image.setProperty("accent", True)
+        btn_import_image.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_import_image.setFixedWidth(200)
+        btn_import_image.clicked.connect(self._on_import_image)
+        button_row.addWidget(btn_import_image)
+
+        layout.addLayout(button_row, 0)
+        layout.setAlignment(button_row, Qt.AlignmentFlag.AlignHCenter)
 
         layout.addSpacing(16)
 
@@ -276,7 +297,7 @@ class HomePage(QWidget):
 
     def _open_recent_task(self, task: Task) -> None:
         width, height = task.canvas_size
-        self.open_editor.emit(width, height)
+        self.open_editor.emit(width, height, task.file_path or "")
 
     def _on_new_design(self) -> None:
         dialog = CanvasSizeDialog(self.viewmodel, self)
@@ -285,4 +306,18 @@ class HomePage(QWidget):
             name = f"Untitled Design {len(self.viewmodel.tasks) + 1}"
             self.viewmodel.add_task(name, (width, height))
             self.refresh()
-            self.open_editor.emit(width, height)
+            self.open_editor.emit(width, height, "")
+
+    def _on_import_image(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(self, IMPORT_IMAGE_LABEL, "", IMAGE_FILE_FILTER)
+        if not file_path:
+            return
+
+        task = self.viewmodel.import_task(file_path)
+        if task is None:
+            QMessageBox.warning(self, IMPORT_IMAGE_LABEL, "That file couldn't be read as an image.")
+            return
+
+        self.refresh()
+        width, height = task.canvas_size
+        self.open_editor.emit(width, height, file_path)
