@@ -30,6 +30,9 @@ class HomeViewModel:
             Task(name="Summer Sale Post", canvas_size=(1080, 1080)),
             Task(name="Event Flyer", canvas_size=(794, 1123)),
             Task(name="Team Slide Deck", canvas_size=(1920, 1080)),
+            Task(name="Instagram Story Ad", canvas_size=(1080, 1920)),
+            Task(name="Product Launch Banner", canvas_size=(1920, 1080)),
+            Task(name="Business Card", canvas_size=(1050, 600)),
         ]
         self.projects: list[Project] = []
 
