@@ -4,13 +4,11 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 
 from src.core import theme
-from src.features.home.models.models import Project
 from src.features.home.viewmodels.home_viewmodel import HomeViewModel
 from src.features.home.views.layout.left_sidebar import LeftSidebar
 from src.features.home.views.layout.navbar import Navbar
 from src.features.home.views.pages.home_page import HomePage
-from src.features.home.views.pages.project_detail_page import ProjectDetailPage
-from src.features.home.views.pages.projects_list_page import ProjectsListPage
+from src.features.home.views.pages.project_page import ProjectPage
 
 # Shared chrome for every page hosted in `self.pages` -- page-specific styling
 # (e.g. the recent-task cards) lives on the page widget itself instead.
@@ -80,35 +78,15 @@ class HomeView(QWidget):
         self.home_page.open_editor.connect(self.open_editor)
         self.pages.addWidget(self.home_page)
 
-        self.projects_root = QStackedWidget()
-
-        self.projects_list_page = ProjectsListPage(self.viewmodel)
-        self.projects_list_page.project_opened.connect(self._on_project_opened)
-        self.projects_root.addWidget(self.projects_list_page)
-
-        self.project_detail_page = ProjectDetailPage(self.viewmodel)
-        self.project_detail_page.back_requested.connect(self._show_projects_list_page)
-        self.project_detail_page.tasks_changed.connect(self.projects_list_page.refresh)
-        self.projects_root.addWidget(self.project_detail_page)
-
-        self.pages.addWidget(self.projects_root)
+        self.project_page = ProjectPage(self.viewmodel)
+        self.pages.addWidget(self.project_page)
 
         self.pages.setCurrentWidget(self.home_page)
 
     def _on_page_selected(self, page_name: str) -> None:
         if page_name == "projects":
-            self.projects_list_page.refresh()
-            if self.project_detail_page.project is not None:
-                self.project_detail_page.refresh()
-            self.pages.setCurrentWidget(self.projects_root)
+            self.project_page.refresh()
+            self.pages.setCurrentWidget(self.project_page)
         else:
             self.home_page.refresh()
             self.pages.setCurrentWidget(self.home_page)
-
-    def _on_project_opened(self, project: Project) -> None:
-        self.project_detail_page.show_project(project)
-        self.projects_root.setCurrentWidget(self.project_detail_page)
-
-    def _show_projects_list_page(self) -> None:
-        self.projects_list_page.refresh()
-        self.projects_root.setCurrentWidget(self.projects_list_page)
