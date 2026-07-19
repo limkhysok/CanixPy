@@ -2,20 +2,39 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPushButton, QFontComboBox, QSpinBox
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsItem
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from src.core import icons
+from src.core import icons, theme
 from src.features.editor.properties_viewmodel import PropertiesPanelViewModel
 
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
 
+RIGHT_SIDEBAR_STYLE = f"""
+PropertiesPanel {{
+    border-left: 1px solid {theme.BORDER};
+}}
+"""
+
 class PropertiesPanel(QWidget):
     def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.main_app = main_app
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(RIGHT_SIDEBAR_STYLE)
         self.viewmodel = PropertiesPanelViewModel()
-        self.main_layout = QVBoxLayout(self)
-        self.main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Outer layout spans the whole widget (so the border-left runs the full
+        # column height); dynamic inspector content lives in the nested
+        # main_layout, which clear_layout()/inspect_item() rebuild in place.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(QLabel("<b>Properties Panel</b>"))
+
+        self.main_layout = QVBoxLayout()
+        outer_layout.addLayout(self.main_layout)
+        outer_layout.addStretch()
+
         self.show_empty_state()
 
     def show_empty_state(self) -> None:

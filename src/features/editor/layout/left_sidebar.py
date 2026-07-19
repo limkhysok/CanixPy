@@ -3,10 +3,16 @@ from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QLabel, QFileDialog
 from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
 from PySide6.QtGui import QDrag
-from src.core import icons
+from src.core import icons, theme
 
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
+
+LEFT_SIDEBAR_STYLE = f"""
+LeftSidebar {{
+    border-right: 1px solid {theme.BORDER};
+}}
+"""
 
 SHAPE_ICONS = {
     "Rectangle": "fa5s.square",
@@ -41,6 +47,8 @@ class LeftSidebar(QWidget):
     def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.main_app = main_app
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(LEFT_SIDEBAR_STYLE)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 

@@ -16,6 +16,8 @@ class ZoomableGraphicsView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setAcceptDrops(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:

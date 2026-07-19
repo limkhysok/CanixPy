@@ -1,12 +1,15 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QComboBox, QLabel, QFileDialog
-from src.core import icons, theme
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QFileDialog
 from src.features.editor.canvas.scene import DesignScene
 from src.features.editor.canvas.view import ZoomableGraphicsView
-from src.features.editor.sidebar_left import LeftSidebar
-from src.features.editor.sidebar_right import PropertiesPanel
+from src.features.editor.layout.left_sidebar import LeftSidebar
+from src.features.editor.layout.right_sidebar import PropertiesPanel
+from src.features.editor.layout.top_navbar import TopNavbar
 from src.features.editor.exporter import export_scene_to_png
 
 class CoreDesignApp(QMainWindow):
+    back_to_home = Signal()
+
     def __init__(self, canvas_size: tuple[int, int] = (800, 600)) -> None:
         super().__init__()
         self.setWindowTitle("Native Python Design Studio v3")
@@ -22,60 +25,33 @@ class CoreDesignApp(QMainWindow):
     def init_ui(self) -> None:
         main_widget = QWidget()
         main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
         content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
 
-        # --- TOP TOOLBAR ---
-        toolbar = QHBoxLayout()
-        self.page_selector = QComboBox()
-        self.page_selector.currentIndexChanged.connect(self.on_page_combo_changed)
-        btn_add_page = QPushButton(icons.icon("fa5s.plus"), "Add Page")
-        btn_add_page.clicked.connect(self.add_new_page)
-
-        btn_zoom_in = QPushButton(icons.icon("fa5s.search-plus"), "Zoom In")
-        btn_zoom_out = QPushButton(icons.icon("fa5s.search-minus"), "Zoom Out")
-        btn_zoom_reset = QPushButton(icons.icon("fa5s.undo"), "Reset")
-        btn_zoom_in.clicked.connect(self.zoom_in)
-        btn_zoom_out.clicked.connect(self.zoom_out)
-        btn_zoom_reset.clicked.connect(self.zoom_reset)
-
-        # NEW EXPORT BUTTON
-        btn_export = QPushButton(icons.icon("fa5s.file-export", color=theme.TEXT_ON_ACCENT), "Export PNG")
-        btn_export.setProperty("accent", True)
-        btn_export.clicked.connect(self.export_page_to_png)
-
-        toolbar.addWidget(QLabel("Pages:"))
-        toolbar.addWidget(self.page_selector)
-        toolbar.addWidget(btn_add_page)
-        toolbar.addSpacing(30)
-        toolbar.addWidget(btn_zoom_in)
-        toolbar.addWidget(btn_zoom_out)
-        toolbar.addWidget(btn_zoom_reset)
-        toolbar.addSpacing(30)
-        toolbar.addWidget(btn_export)
-        toolbar.addStretch()
+        # --- TOP NAVBAR ---
+        self.top_navbar = TopNavbar(self)
+        self.top_navbar.back_clicked.connect(self.back_to_home.emit)
+        self.page_selector = self.top_navbar.page_selector
 
         # --- PANEL SYSTEM SETUP ---
-        left_sidebar_layout = QVBoxLayout()
         # Instantiate our upgraded LeftSidebar panel module
         self.left_panel = LeftSidebar(self)
-        left_sidebar_layout.addWidget(self.left_panel)
-
-        right_sidebar_layout = QVBoxLayout()
-        right_sidebar_layout.addWidget(QLabel("<b>Properties Panel</b>"))
         self.properties_panel = PropertiesPanel(self)
-        right_sidebar_layout.addWidget(self.properties_panel)
-        right_sidebar_layout.addStretch()
 
         # --- CANVAS SETUP ---
         self.scene = DesignScene(self)
         self.view = ZoomableGraphicsView(self.scene, self)
 
         # Assembly
-        content_layout.addLayout(left_sidebar_layout, 1)
+        content_layout.addWidget(self.left_panel, 1)
         content_layout.addWidget(self.view, 4)
-        content_layout.addLayout(right_sidebar_layout, 1)
+        content_layout.addWidget(self.properties_panel, 1)
 
-        main_layout.addLayout(toolbar)
+        main_layout.addWidget(self.top_navbar)
         main_layout.addLayout(content_layout)
         self.setCentralWidget(main_widget)
 

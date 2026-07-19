@@ -28,9 +28,13 @@ class App(QMainWindow):
             self.editor_view.deleteLater()
 
         self.editor_view = CoreDesignApp((width, height))
+        self.editor_view.back_to_home.connect(self.show_home)
         if image_path:
             center = QPointF(width / 2, height / 2)
             self.editor_view.scene.add_image_item(image_path, center)
 
         self.stack.addWidget(self.editor_view)
         self.stack.setCurrentWidget(self.editor_view)
+
+    def show_home(self) -> None:
+        self.stack.setCurrentWidget(self.home_view)
