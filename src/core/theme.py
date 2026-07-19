@@ -12,6 +12,7 @@ from __future__ import annotations
 BACKGROUND = "#FFFFFF"
 SURFACE = "#FFFFFF"  # used for side panels/hover states
 BORDER = "#E8E1DC"
+CANVAS_SURROUND = "#EAE6E0"  # editor viewport backdrop the white page floats on
 
 # Brand / accent -- Sage Green
 ACCENT = "#8A9A76"
@@ -83,5 +84,88 @@ def build_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 4px;
         padding: 4px 6px;
+    }}
+
+    QSlider::groove:horizontal {{
+        height: 4px;
+        background: {BORDER};
+        border-radius: 2px;
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {ACCENT};
+        border-radius: 2px;
+    }}
+    QSlider::add-page:horizontal {{
+        background: {BORDER};
+        border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        width: 14px;
+        height: 14px;
+        margin: -5px 0;
+        background: {ACCENT};
+        border: 2px solid {BACKGROUND};
+        border-radius: 7px;
+    }}
+    QSlider::handle:horizontal:hover {{
+        background: {ACCENT_HOVER};
+    }}
+
+    QCheckBox {{
+        spacing: 8px;
+    }}
+    QCheckBox::indicator {{
+        width: 15px;
+        height: 15px;
+        border: 1px solid {BORDER};
+        border-radius: 4px;
+        background: {BACKGROUND};
+    }}
+    QCheckBox::indicator:hover {{
+        border-color: {ACCENT};
+    }}
+    QCheckBox::indicator:checked {{
+        background: {ACCENT};
+        border-color: {ACCENT};
+    }}
+
+    QMenu {{
+        background-color: {BACKGROUND};
+        border: 1px solid {BORDER};
+        border-radius: 8px;
+        padding: 4px;
+    }}
+    QMenu::item {{
+        padding: 6px 24px 6px 12px;
+        border-radius: 6px;
+        color: {TEXT_PRIMARY};
+    }}
+    QMenu::item:selected {{
+        background-color: {ACCENT_LIGHT};
+    }}
+    QMenu::separator {{
+        height: 1px;
+        background: {BORDER};
+        margin: 4px 8px;
+    }}
+
+    QScrollBar:vertical {{
+        background: transparent;
+        width: 10px;
+        margin: 0px;
+    }}
+    QScrollBar::handle:vertical {{
+        background: {BORDER};
+        border-radius: 4px;
+        min-height: 24px;
+    }}
+    QScrollBar::handle:vertical:hover {{
+        background: {TEXT_SECONDARY};
+    }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+        height: 0px;
+    }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+        background: transparent;
     }}
     """
