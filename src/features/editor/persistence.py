@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QGradient, QLinearGradient, QPen, QPixmap, QTextOption
 from PySide6.QtWidgets import (
+    QAbstractGraphicsShapeItem,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsItemGroup,
@@ -37,10 +39,12 @@ from src.features.editor.canvas.items import (
     ResizableRectItem,
     RotatableTextItem,
     get_layer_name,
+    get_shape_kind,
     is_layer_locked,
     make_shadow_effect,
     set_layer_locked,
     set_layer_name,
+    set_shape_kind,
 )
 
 if TYPE_CHECKING:
@@ -57,12 +61,12 @@ def _common_fields(item: QGraphicsItem) -> dict[str, Any]:
         "visible": item.isVisible(),
         "locked": is_layer_locked(item),
         "opacity": item.opacity(),
-        "shadow": item.graphicsEffect() is not None,
+        "shadow": item.graphicsEffect() is not None,  # type: ignore[reportUnnecessaryComparison]
     }
     name = get_layer_name(item)
     if name:
         fields["name"] = name
-    shape_kind = getattr(item, "shape_kind", None)
+    shape_kind = get_shape_kind(item)
     if shape_kind and not isinstance(item, ResizablePolygonItem):
         # ResizablePolygonItem's own shape_kind is the *template* selector
         # (serialized separately in its "polygon" branch below); this is
@@ -82,7 +86,7 @@ def _apply_common_fields(item: QGraphicsItem, data: dict[str, Any]) -> None:
     if data.get("name"):
         set_layer_name(item, data["name"])
     if data.get("shape_kind"):
-        item.shape_kind = data["shape_kind"]
+        set_shape_kind(item, data["shape_kind"])
     item.setFlags(
         QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
         QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -91,10 +95,10 @@ def _apply_common_fields(item: QGraphicsItem, data: dict[str, Any]) -> None:
         set_layer_locked(item, True)
 
 
-def _fill_fields(item: QGraphicsRectItem | QGraphicsEllipseItem) -> dict[str, Any]:
+def _fill_fields(item: QAbstractGraphicsShapeItem) -> dict[str, Any]:
     brush = item.brush()
     fields: dict[str, Any]
-    if brush.style() == Qt.BrushStyle.LinearGradientPattern and brush.gradient() is not None:
+    if brush.style() == Qt.BrushStyle.LinearGradientPattern and brush.gradient() is not None:  # type: ignore[reportUnnecessaryComparison]
         stops = brush.gradient().stops()
         start = stops[0][1].name() if len(stops) > 0 else "#000000"
         end = stops[-1][1].name() if len(stops) > 1 else start
@@ -109,7 +113,7 @@ def _fill_fields(item: QGraphicsRectItem | QGraphicsEllipseItem) -> dict[str, An
     return fields
 
 
-def _apply_fill_fields(item: QGraphicsRectItem | QGraphicsEllipseItem, data: dict[str, Any]) -> None:
+def _apply_fill_fields(item: QAbstractGraphicsShapeItem, data: dict[str, Any]) -> None:
     gradient_colors = data.get("gradient")
     if gradient_colors:
         gradient = QLinearGradient(0, 0, 1, 1)
@@ -135,7 +139,7 @@ def serialize_item(item: QGraphicsItem) -> dict[str, Any] | None:
             **_common_fields(item),
         }
     if isinstance(item, ResizablePolygonItem):
-        rect = item._local_rect()
+        rect = item.local_rect()
         return {
             "kind": "polygon",
             "shape_kind": item.shape_kind,
@@ -183,16 +187,73 @@ def serialize_item(item: QGraphicsItem) -> dict[str, Any] | None:
         io_device.close()
         return {
             "kind": "image",
-            "png_base64": base64.b64encode(bytes(buffer)).decode("ascii"),
+            "png_base64": base64.b64encode(buffer.data()).decode("ascii"),
             "scale": item.scale(),
             **_common_fields(item),
         }
     return None
 
 
+def _deserialize_polygon(data: dict[str, Any]) -> QGraphicsItem:
+    item = ResizablePolygonItem(data["shape_kind"], data["width"], data["height"])
+    _apply_fill_fields(item, data)
+    return item
+
+
+def _deserialize_rect(data: dict[str, Any]) -> QGraphicsItem:
+    item = ResizableRectItem(0, 0, data["width"], data["height"])
+    _apply_fill_fields(item, data)
+    return item
+
+
+def _deserialize_ellipse(data: dict[str, Any]) -> QGraphicsItem:
+    item = ResizableEllipseItem(0, 0, data["width"], data["height"])
+    _apply_fill_fields(item, data)
+    return item
+
+
+def _deserialize_text(data: dict[str, Any]) -> QGraphicsItem:
+    item = RotatableTextItem(data["text"])
+    font = QFont(data["font_family"])
+    font.setPointSize(data["font_size"])
+    font.setBold(data.get("bold", False))
+    font.setItalic(data.get("italic", False))
+    font.setUnderline(data.get("underline", False))
+    item.setFont(font)
+    item.setDefaultTextColor(QColor(data["color"]))
+    item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditable)
+    if data.get("text_width", -1) >= 0:
+        item.setTextWidth(data["text_width"])
+    if "alignment" in data:
+        option = QTextOption(item.document().defaultTextOption())
+        option.setAlignment(Qt.AlignmentFlag(data["alignment"]))
+        item.document().setDefaultTextOption(option)
+    return item
+
+
+def _deserialize_image(data: dict[str, Any]) -> QGraphicsItem:
+    pixmap = QPixmap()
+    pixmap.loadFromData(base64.b64decode(data["png_base64"]), b"PNG")
+    item = ResizablePixmapItem(pixmap)
+    item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+    item.setScale(data.get("scale", 1.0))
+    return item
+
+
+# "group" isn't in here -- it recurses into deserialize_item for its children
+# and doesn't fit the flat (data) -> item shape the others share, so
+# deserialize_item handles it directly instead of through this dispatch table.
+_ITEM_BUILDERS: dict[str, Callable[[dict[str, Any]], QGraphicsItem]] = {
+    "polygon": _deserialize_polygon,
+    "rect": _deserialize_rect,
+    "ellipse": _deserialize_ellipse,
+    "text": _deserialize_text,
+    "image": _deserialize_image,
+}
+
+
 def deserialize_item(data: dict[str, Any]) -> QGraphicsItem | None:
     kind = data.get("kind")
-    item: QGraphicsItem
 
     if kind == "group":
         group = QGraphicsItemGroup()
@@ -203,40 +264,14 @@ def deserialize_item(data: dict[str, Any]) -> QGraphicsItem | None:
         _apply_common_fields(group, data)
         return group
 
-    if kind == "polygon":
-        item = ResizablePolygonItem(data["shape_kind"], data["width"], data["height"])
-        _apply_fill_fields(item, data)
-    elif kind == "rect":
-        item = ResizableRectItem(0, 0, data["width"], data["height"])
-        _apply_fill_fields(item, data)
-    elif kind == "ellipse":
-        item = ResizableEllipseItem(0, 0, data["width"], data["height"])
-        _apply_fill_fields(item, data)
-    elif kind == "text":
-        item = RotatableTextItem(data["text"])
-        font = QFont(data["font_family"])
-        font.setPointSize(data["font_size"])
-        font.setBold(data.get("bold", False))
-        font.setItalic(data.get("italic", False))
-        font.setUnderline(data.get("underline", False))
-        item.setFont(font)
-        item.setDefaultTextColor(QColor(data["color"]))
-        item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditable)
-        if data.get("text_width", -1) >= 0:
-            item.setTextWidth(data["text_width"])
-        if "alignment" in data:
-            option = QTextOption(item.document().defaultTextOption())
-            option.setAlignment(Qt.AlignmentFlag(data["alignment"]))
-            item.document().setDefaultTextOption(option)
-    elif kind == "image":
-        pixmap = QPixmap()
-        pixmap.loadFromData(base64.b64decode(data["png_base64"]), "PNG")
-        item = ResizablePixmapItem(pixmap)
-        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
-        item.setScale(data.get("scale", 1.0))
-    else:
+    if not isinstance(kind, str):
         return None
 
+    builder = _ITEM_BUILDERS.get(kind)
+    if builder is None:
+        return None
+
+    item = builder(data)
     _apply_common_fields(item, data)
     return item
 
@@ -248,7 +283,7 @@ def serialize_page(scene: "DesignScene") -> list[dict[str, Any]]:
         # Grouped children are serialized recursively as part of their
         # group (see the QGraphicsItemGroup case in serialize_item), not
         # as separate top-level entries here.
-        if item is page_frame or item.parentItem() is not None:
+        if item is page_frame or item.parentItem() is not None:  # type: ignore[reportUnnecessaryComparison]
             continue
         data = serialize_item(item)
         if data is not None:

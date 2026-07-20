@@ -78,7 +78,7 @@ def _resized_rect(start: QRectF, handle: str, delta: QPointF) -> QRectF:
 class _HandleMixin:
     """Adds resize + rotate handles to a QGraphicsItem when selected.
 
-    Subclasses implement `_local_rect()` (item-local geometry used to place
+    Subclasses implement `local_rect()` (item-local geometry used to place
     handles) and `_apply_resize(rect)` (mutate the item to match that rect).
     Set `RESIZE_HANDLES = ()` to offer rotate-only interaction (used by text).
     """
@@ -97,7 +97,7 @@ class _HandleMixin:
         self._rotate_start_rotation = 0.0
 
     # -- geometry (implemented per subclass) -----------------------------
-    def _local_rect(self) -> QRectF:
+    def local_rect(self) -> QRectF:
         raise NotImplementedError
 
     def _apply_resize(self, rect: QRectF) -> None:
@@ -105,10 +105,10 @@ class _HandleMixin:
 
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
         pad = HANDLE_SIZE + ROTATE_HANDLE_OFFSET
-        return self._local_rect().adjusted(-pad, -pad, pad, pad)
+        return self.local_rect().adjusted(-pad, -pad, pad, pad)
 
     def _handle_positions(self) -> dict[str, QPointF]:
-        r = self._local_rect()
+        r = self.local_rect()
         all_positions = {
             "tl": r.topLeft(), "tm": QPointF(r.center().x(), r.top()), "tr": r.topRight(),
             "ml": QPointF(r.left(), r.center().y()), "mr": QPointF(r.right(), r.center().y()),
@@ -117,7 +117,7 @@ class _HandleMixin:
         return {name: pos for name, pos in all_positions.items() if name in self.RESIZE_HANDLES}
 
     def _rotate_handle_pos(self) -> QPointF:
-        r = self._local_rect()
+        r = self.local_rect()
         return QPointF(r.center().x(), r.top() - ROTATE_HANDLE_OFFSET)
 
     def _handle_at(self, local_pos: QPointF) -> str | None:
@@ -139,7 +139,7 @@ class _HandleMixin:
         painter.setPen(pen)
         painter.setBrush(QColor("#ffffff"))
 
-        r = self._local_rect()
+        r = self.local_rect()
         rp = self._rotate_handle_pos()
         painter.drawLine(QPointF(r.center().x(), r.top()), rp)
         painter.drawEllipse(rp, HANDLE_SIZE / 2, HANDLE_SIZE / 2)
@@ -159,7 +159,7 @@ class _HandleMixin:
             handle = self._handle_at(event.pos())
             if handle == "rotate":
                 self._rotating = True
-                center = self.mapToScene(self._local_rect().center())
+                center = self.mapToScene(self.local_rect().center())
                 p = event.scenePos()
                 self._rotate_start_angle = math.degrees(math.atan2(p.y() - center.y(), p.x() - center.x()))
                 self._rotate_start_rotation = self.rotation()  # type: ignore[attr-defined]
@@ -167,7 +167,7 @@ class _HandleMixin:
                 return
             if handle:
                 self._active_handle = handle
-                self._resize_start_rect = QRectF(self._local_rect())
+                self._resize_start_rect = QRectF(self.local_rect())
                 self._resize_start_pos = event.pos()
                 self._resize_changed = False
                 event.accept()
@@ -176,10 +176,10 @@ class _HandleMixin:
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._rotating:
-            center = self.mapToScene(self._local_rect().center())
+            center = self.mapToScene(self.local_rect().center())
             p = event.scenePos()
             angle = math.degrees(math.atan2(p.y() - center.y(), p.x() - center.x()))
-            self.setTransformOriginPoint(self._local_rect().center())  # type: ignore[attr-defined]
+            self.setTransformOriginPoint(self.local_rect().center())  # type: ignore[attr-defined]
             self.setRotation(self._rotate_start_rotation + (angle - self._rotate_start_angle))  # type: ignore[attr-defined]
             event.accept()
             return
@@ -208,7 +208,7 @@ class _HandleMixin:
             self._active_handle = None
             if self._resize_changed and self._resize_start_rect is not None:
                 old_rect = QRectF(self._resize_start_rect)
-                new_rect = QRectF(self._local_rect())
+                new_rect = QRectF(self.local_rect())
                 self._push_undo(
                     lambda: self._apply_resize(old_rect),
                     lambda: self._apply_resize(new_rect),
@@ -224,7 +224,7 @@ class _HandleMixin:
 
 
 class ResizableRectItem(_HandleMixin, QGraphicsRectItem):
-    def _local_rect(self) -> QRectF:
+    def local_rect(self) -> QRectF:
         return self.rect()
 
     def _apply_resize(self, rect: QRectF) -> None:
@@ -236,7 +236,7 @@ class ResizableRectItem(_HandleMixin, QGraphicsRectItem):
 
 
 class ResizableEllipseItem(_HandleMixin, QGraphicsEllipseItem):
-    def _local_rect(self) -> QRectF:
+    def local_rect(self) -> QRectF:
         return self.rect()
 
     def _apply_resize(self, rect: QRectF) -> None:
@@ -252,11 +252,11 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
 
     RESIZE_HANDLES = _CORNER_HANDLES
 
-    def _local_rect(self) -> QRectF:
+    def local_rect(self) -> QRectF:
         return QRectF(self.pixmap().rect())
 
     def _apply_resize(self, rect: QRectF) -> None:
-        native = self._local_rect()
+        native = self.local_rect()
         if native.width() <= 0:
             return
         scale = max(rect.width() / native.width(), 0.05)
@@ -300,7 +300,7 @@ class ResizablePolygonItem(_HandleMixin, QGraphicsPolygonItem):
         self._local_bounds = QRectF(0, 0, width, height)
         self._sync_polygon()
 
-    def _local_rect(self) -> QRectF:
+    def local_rect(self) -> QRectF:
         return self._local_bounds
 
     def _apply_resize(self, rect: QRectF) -> None:
@@ -338,6 +338,14 @@ def set_layer_locked(item: QGraphicsItem, locked: bool) -> None:
         item.setSelected(False)
 
 
+def get_shape_kind(item: QGraphicsItem) -> str | None:
+    return getattr(item, "shape_kind", None)
+
+
+def set_shape_kind(item: QGraphicsItem, shape_kind: str) -> None:
+    item.shape_kind = shape_kind  # type: ignore[attr-defined]
+
+
 class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
     """Text supports rotation only -- resizing a text box's width/height
     doesn't map cleanly onto font scale vs. reflow, and font size already
@@ -345,10 +353,10 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
 
     RESIZE_HANDLES: tuple[str, ...] = ()
 
-    def _local_rect(self) -> QRectF:
+    def local_rect(self) -> QRectF:
         # Must call the unbound QGraphicsTextItem implementation directly --
         # `self.boundingRect()` would resolve to the mixin's own override
-        # (which calls `_local_rect()`), recursing infinitely.
+        # (which calls `local_rect()`), recursing infinitely.
         return QGraphicsTextItem.boundingRect(self)
 
     def _apply_resize(self, rect: QRectF) -> None:
