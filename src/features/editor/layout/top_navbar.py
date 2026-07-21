@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize, Signal
@@ -11,53 +12,7 @@ from src.core import icons, theme
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
 
-TOP_NAVBAR_STYLE = f"""
-TopNavbar {{
-    border-bottom: 1px solid {theme.BORDER};
-}}
-QPushButton#backButton {{
-    background-color: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 12px;
-}}
-QPushButton#backButton:hover {{
-    background-color: {theme.BORDER};
-}}
-QPushButton#iconButton {{
-    border-radius: 6px;
-    padding: 0px;
-}}
-QLabel#navLabel {{
-    color: {theme.TEXT_SECONDARY};
-}}
-QToolButton#exportButton {{
-    background-color: {theme.ACCENT};
-    border: 1px solid {theme.ACCENT};
-    border-radius: 6px;
-    padding: 6px 14px;
-    color: {theme.TEXT_ON_ACCENT};
-    font-weight: 600;
-}}
-QToolButton#exportButton:hover {{
-    background-color: {theme.ACCENT_HOVER};
-    border-color: {theme.ACCENT_HOVER};
-}}
-QToolButton#exportButton::menu-indicator {{
-    subcontrol-position: right center;
-    subcontrol-origin: padding;
-    right: -4px;
-}}
-QToolButton#pageMenuButton {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 6px;
-    padding: 6px 10px;
-}}
-QToolButton#pageMenuButton:hover {{
-    background-color: {theme.SURFACE};
-}}
-"""
+TOP_NAVBAR_STYLE = theme.load_qss(Path(__file__).with_name("top_navbar.qss"))
 
 ICON_BUTTON_SIZE = QSize(32, 32)
 

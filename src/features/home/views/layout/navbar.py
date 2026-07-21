@@ -1,24 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget
 
 from src.core import icons, theme
 
-NAVBAR_STYLE = f"""
-Navbar {{
-    border-bottom: 1px solid {theme.BORDER};
-}}
-QPushButton#toggleButton {{
-    background-color: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 8px;
-}}
-QPushButton#toggleButton:hover {{
-    background-color: {theme.BORDER};
-}}
-"""
+NAVBAR_STYLE = theme.load_qss(Path(__file__).with_name("navbar.qss"))
 
 
 class Navbar(QWidget):

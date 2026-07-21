@@ -1,0 +1,197 @@
+QLabel {
+    background-color: transparent;
+}
+QLabel#dialogTitle {
+    font-size: 22px;
+    font-weight: 600;
+    color: $TEXT_PRIMARY;
+}
+QLabel#dialogSubtitle {
+    font-size: 13px;
+    color: $TEXT_SECONDARY;
+}
+QLabel#sectionLabel {
+    font-size: 12px;
+    font-weight: 600;
+    color: $TEXT_SECONDARY;
+}
+QLabel#hintLabel {
+    font-size: 12px;
+    color: $TEXT_SECONDARY;
+}
+QScrollArea#categoryScroll, QScrollArea#presetScroll {
+    background-color: transparent;
+    border: none;
+}
+QScrollArea#categoryScroll QWidget#qt_scrollarea_viewport, QScrollArea#presetScroll QWidget#qt_scrollarea_viewport {
+    background-color: transparent;
+}
+QPushButton#categoryChip {
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 3px;
+}
+QLabel#categoryChipText {
+    font-size: 15px;
+    font-weight: 500;
+    margin-top: 1px;
+    color: $TEXT_PRIMARY;
+}
+QWidget#presetCard {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    border-radius: 10px;
+}
+QWidget#presetCard:hover {
+    background-color: $ACCENT_LIGHT;
+    border-color: $ACCENT;
+}
+QWidget#presetCard:focus {
+    border: 1px solid $ACCENT;
+    outline: none;
+}
+QWidget#presetCard[selected="true"] {
+    background-color: $ACCENT_LIGHT;
+    border: 2px solid $ACCENT;
+    outline: none;
+}
+QWidget#presetIconBox {
+    background-color: $ACCENT_LIGHT;
+    border-radius: 12px;
+}
+QWidget#presetCard[selected="true"] QWidget#presetIconBox {
+    background-color: $ACCENT;
+}
+QLabel#presetSwatch {
+    background-color: $ACCENT;
+    border-radius: 3px;
+}
+QWidget#presetCard[selected="true"] QLabel#presetSwatch {
+    background-color: $TEXT_ON_ACCENT;
+}
+QLabel#presetName {
+    font-size: 14px;
+    font-weight: 600;
+    color: $TEXT_PRIMARY;
+}
+QLabel#presetDims {
+    font-size: 12px;
+    color: $TEXT_SECONDARY;
+}
+QWidget#customSizeSection {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    border-radius: 10px;
+}
+QWidget#customSizeSection[active="true"] {
+    border: 2px solid $ACCENT;
+}
+QWidget#customSizeSection QLabel#fieldLabel {
+    font-size: 12px;
+    color: $TEXT_SECONDARY;
+}
+QWidget#spinField {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+}
+QWidget#spinField[focused="true"] {
+    border: 1px solid $ACCENT;
+}
+QDoubleSpinBox#spinFieldInput {
+    background-color: transparent;
+    border: none;
+    font-size: 15px;
+    padding: 6px 0px;
+}
+QDoubleSpinBox#spinFieldInput:focus {
+    outline: none;
+}
+QWidget#unitField {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+}
+QWidget#unitField[focused="true"] {
+    border: 1px solid $ACCENT;
+}
+QComboBox#unitFieldInput {
+    background-color: transparent;
+    border: none;
+    font-size: 15px;
+    padding: 6px 0px;
+}
+QComboBox#unitFieldInput:focus {
+    outline: none;
+}
+QComboBox#unitFieldInput::drop-down {
+    border: none;
+    width: 0px;
+}
+QComboBox#unitFieldInput::down-arrow {
+    image: none;
+    width: 0px;
+    height: 0px;
+}
+QComboBox#unitFieldInput QAbstractItemView {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    outline: none;
+    padding: 4px;
+    selection-background-color: $ACCENT_LIGHT;
+    selection-color: $TEXT_PRIMARY;
+}
+QComboBox#unitFieldInput QAbstractItemView::item {
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+QToolButton#spinStepButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 3px;
+    padding: 0px;
+}
+QToolButton#spinStepButton:hover {
+    background-color: $ACCENT_LIGHT;
+}
+QToolButton#spinStepButton:pressed {
+    background-color: $ACCENT;
+}
+QLabel#customSizeSeparator {
+    color: $TEXT_SECONDARY;
+    font-weight: 600;
+    font-size: 16px;
+}
+QWidget#customPreviewBox {
+    background-color: $SURFACE;
+    border: 1px solid $BORDER;
+    border-radius: 10px;
+}
+QLabel#customPreviewSwatch {
+    background-color: $ACCENT;
+    border-radius: 3px;
+}
+QFrame#footerDivider {
+    background-color: $BORDER;
+    max-height: 1px;
+    border: none;
+}
+QPushButton#closeButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
+    min-height: 0px;
+}
+QPushButton#closeButton:hover {
+    background-color: $BORDER;
+}
+QPushButton#closeButton:pressed {
+    background-color: $ACCENT_LIGHT;
+}
+QDialogButtonBox QPushButton {
+    min-height: 22px;
+    padding: 8px 18px;
+    font-weight: 500;
+}

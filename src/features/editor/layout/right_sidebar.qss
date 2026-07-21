@@ -1,0 +1,21 @@
+PropertiesPanel {
+    border-left: 1px solid $BORDER;
+}
+QLabel#panelTitle {
+    color: $TEXT_PRIMARY;
+    font-size: 14px;
+    font-weight: 600;
+}
+QLabel#sectionHeader {
+    color: $TEXT_SECONDARY;
+    font-size: 11px;
+    font-weight: 700;
+}
+QLabel#hintText {
+    color: $TEXT_SECONDARY;
+    font-size: 12px;
+}
+QPushButton#toggleButton:checked {
+    background-color: $ACCENT_LIGHT;
+    border-color: $ACCENT;
+}

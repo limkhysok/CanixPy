@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
@@ -45,24 +46,7 @@ _ROW_HEIGHT = 30
 _ICON_SIZE = 14
 _TOGGLE_SIZE = 20
 
-LAYERS_PANEL_STYLE = f"""
-QWidget#layerRow[selected="true"] {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-radius: 6px;
-}}
-QLabel#layerName {{
-    color: {theme.TEXT_PRIMARY};
-}}
-QPushButton#layerToggle {{
-    background-color: transparent;
-    border: none;
-    padding: 0px;
-}}
-QPushButton#layerToggle:hover {{
-    background-color: {theme.BORDER};
-    border-radius: 4px;
-}}
-"""
+LAYERS_PANEL_STYLE = theme.load_qss(Path(__file__).with_name("layers_panel.qss"))
 
 
 def _icon_for(item: QGraphicsItem) -> str:

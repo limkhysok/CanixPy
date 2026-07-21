@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import partial
 from math import gcd
+from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
@@ -42,7 +43,15 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import icons, theme
-from src.features.home.viewmodels.home_viewmodel import CanvasPreset, HomeViewModel
+from src.features.home.viewmodels.home_viewmodel import (
+    MAX_CANVAS_PX,
+    UNIT_DECIMALS,
+    UNIT_PX_PER_UNIT,
+    CanvasPreset,
+    HomeViewModel,
+    px_to_unit,
+    unit_to_px,
+)
 
 CATEGORY_ICONS: dict[str, str] = {
     "Popular": "fa5s.fire",
@@ -71,205 +80,7 @@ CATEGORY_CHIP_ICON_SIZE = 14
 
 DIALOG_CORNER_RADIUS = 16
 
-DIALOG_STYLE = f"""
-QLabel {{
-    background-color: transparent;
-}}
-QLabel#dialogTitle {{
-    font-size: 22px;
-    font-weight: 600;
-    color: {theme.TEXT_PRIMARY};
-}}
-QLabel#dialogSubtitle {{
-    font-size: 13px;
-    color: {theme.TEXT_SECONDARY};
-}}
-QLabel#sectionLabel {{
-    font-size: 12px;
-    font-weight: 600;
-    color: {theme.TEXT_SECONDARY};
-}}
-QLabel#hintLabel {{
-    font-size: 12px;
-    color: {theme.TEXT_SECONDARY};
-}}
-QScrollArea#categoryScroll, QScrollArea#presetScroll {{
-    background-color: transparent;
-    border: none;
-}}
-QScrollArea#categoryScroll QWidget#qt_scrollarea_viewport, QScrollArea#presetScroll QWidget#qt_scrollarea_viewport {{
-    background-color: transparent;
-}}
-QPushButton#categoryChip {{
-    background-color: transparent;
-    border: none;
-    border-radius: 0px;
-    padding: 3px;
-}}
-QLabel#categoryChipText {{
-    font-size: 15px;
-    font-weight: 500;
-    margin-top: 1px;
-    color: {theme.TEXT_PRIMARY};
-}}
-QWidget#presetCard {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 10px;
-}}
-QWidget#presetCard:hover {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-color: {theme.ACCENT};
-}}
-QWidget#presetCard:focus {{
-    border: 1px solid {theme.ACCENT};
-    outline: none;
-}}
-QWidget#presetCard[selected="true"] {{
-    background-color: {theme.ACCENT_LIGHT};
-    border: 2px solid {theme.ACCENT};
-    outline: none;
-}}
-QWidget#presetIconBox {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-radius: 12px;
-}}
-QWidget#presetCard[selected="true"] QWidget#presetIconBox {{
-    background-color: {theme.ACCENT};
-}}
-QLabel#presetSwatch {{
-    background-color: {theme.ACCENT};
-    border-radius: 3px;
-}}
-QWidget#presetCard[selected="true"] QLabel#presetSwatch {{
-    background-color: {theme.TEXT_ON_ACCENT};
-}}
-QLabel#presetName {{
-    font-size: 14px;
-    font-weight: 600;
-    color: {theme.TEXT_PRIMARY};
-}}
-QLabel#presetDims {{
-    font-size: 12px;
-    color: {theme.TEXT_SECONDARY};
-}}
-QWidget#customSizeSection {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 10px;
-}}
-QWidget#customSizeSection[active="true"] {{
-    border: 2px solid {theme.ACCENT};
-}}
-QWidget#customSizeSection QLabel#fieldLabel {{
-    font-size: 12px;
-    color: {theme.TEXT_SECONDARY};
-}}
-QWidget#spinField {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 8px;
-}}
-QWidget#spinField[focused="true"] {{
-    border: 1px solid {theme.ACCENT};
-}}
-QDoubleSpinBox#spinFieldInput {{
-    background-color: transparent;
-    border: none;
-    font-size: 15px;
-    padding: 6px 0px;
-}}
-QDoubleSpinBox#spinFieldInput:focus {{
-    outline: none;
-}}
-QWidget#unitField {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 8px;
-}}
-QWidget#unitField[focused="true"] {{
-    border: 1px solid {theme.ACCENT};
-}}
-QComboBox#unitFieldInput {{
-    background-color: transparent;
-    border: none;
-    font-size: 15px;
-    padding: 6px 0px;
-}}
-QComboBox#unitFieldInput:focus {{
-    outline: none;
-}}
-QComboBox#unitFieldInput::drop-down {{
-    border: none;
-    width: 0px;
-}}
-QComboBox#unitFieldInput::down-arrow {{
-    image: none;
-    width: 0px;
-    height: 0px;
-}}
-QComboBox#unitFieldInput QAbstractItemView {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    outline: none;
-    padding: 4px;
-    selection-background-color: {theme.ACCENT_LIGHT};
-    selection-color: {theme.TEXT_PRIMARY};
-}}
-QComboBox#unitFieldInput QAbstractItemView::item {{
-    padding: 4px 10px;
-    border-radius: 6px;
-}}
-QToolButton#spinStepButton {{
-    background-color: transparent;
-    border: none;
-    border-radius: 3px;
-    padding: 0px;
-}}
-QToolButton#spinStepButton:hover {{
-    background-color: {theme.ACCENT_LIGHT};
-}}
-QToolButton#spinStepButton:pressed {{
-    background-color: {theme.ACCENT};
-}}
-QLabel#customSizeSeparator {{
-    color: {theme.TEXT_SECONDARY};
-    font-weight: 600;
-    font-size: 16px;
-}}
-QWidget#customPreviewBox {{
-    background-color: {theme.SURFACE};
-    border: 1px solid {theme.BORDER};
-    border-radius: 10px;
-}}
-QLabel#customPreviewSwatch {{
-    background-color: {theme.ACCENT};
-    border-radius: 3px;
-}}
-QFrame#footerDivider {{
-    background-color: {theme.BORDER};
-    max-height: 1px;
-    border: none;
-}}
-QPushButton#closeButton {{
-    background-color: transparent;
-    border: none;
-    border-radius: 6px;
-    padding: 0px;
-    min-height: 0px;
-}}
-QPushButton#closeButton:hover {{
-    background-color: {theme.BORDER};
-}}
-QPushButton#closeButton:pressed {{
-    background-color: {theme.ACCENT_LIGHT};
-}}
-QDialogButtonBox QPushButton {{
-    min-height: 22px;
-    padding: 8px 18px;
-    font-weight: 500;
-}}
-"""
+DIALOG_STYLE = theme.load_qss(Path(__file__).with_name("canvas_size_dialog.qss"))
 
 PRESET_SWATCH_MAX = 24
 PRESET_SWATCH_MIN = 8
@@ -281,18 +92,6 @@ BACKDROP_BLUR_RADIUS = 18
 BACKDROP_BLUR_DOWNSCALE = 3
 BACKDROP_TINT_COLOR = "#1A1613"
 BACKDROP_TINT_ALPHA = 90
-
-MAX_CANVAS_PX = 10000
-
-# Pixels-per-unit at the standard 96 DPI screen-design reference (the same
-# reference Canva/Figma use), so a width typed as "1 in" maps to 96 px.
-UNIT_PX_PER_UNIT: dict[str, float] = {
-    "px": 1.0,
-    "in": 96.0,
-    "mm": 96.0 / 25.4,
-    "cm": 96.0 / 2.54,
-}
-UNIT_DECIMALS: dict[str, int] = {"px": 0, "in": 2, "mm": 1, "cm": 2}
 
 
 def _swatch_size(width: int, height: int) -> tuple[int, int]:
@@ -1017,10 +816,10 @@ class CanvasSizeDialog(QDialog):
             field.setSuffix(f" {self._unit}")
 
     def _px_to_unit(self, value_px: int) -> float:
-        return value_px / UNIT_PX_PER_UNIT[self._unit]
+        return px_to_unit(value_px, self._unit)
 
     def _unit_to_px(self, value: float) -> int:
-        return round(value * UNIT_PX_PER_UNIT[self._unit])
+        return unit_to_px(value, self._unit)
 
     def _update_custom_preview(self, width: int, height: int) -> None:
         swatch_width, swatch_height = _swatch_size(width, height)

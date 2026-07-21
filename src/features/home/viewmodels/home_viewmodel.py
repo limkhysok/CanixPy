@@ -2,10 +2,40 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
 
 from PySide6.QtGui import QImageReader
 
 from src.features.home.models.models import Project, Task
+
+MAX_CANVAS_PX = 10000
+
+# Pixels-per-unit at the standard 96 DPI screen-design reference (the same
+# reference Canva/Figma use), so a width typed as "1 in" maps to 96 px.
+UNIT_PX_PER_UNIT: dict[str, float] = {
+    "px": 1.0,
+    "in": 96.0,
+    "mm": 96.0 / 25.4,
+    "cm": 96.0 / 2.54,
+}
+UNIT_DECIMALS: dict[str, int] = {"px": 0, "in": 2, "mm": 1, "cm": 2}
+
+
+def px_to_unit(value_px: float, unit: str) -> float:
+    return value_px / UNIT_PX_PER_UNIT[unit]
+
+
+def unit_to_px(value: float, unit: str) -> int:
+    return round(value * UNIT_PX_PER_UNIT[unit])
+
+
+def _clamp_canvas_size(size: tuple[int, int]) -> tuple[int, int]:
+    width, height = size
+    return (
+        min(max(width, 1), MAX_CANVAS_PX),
+        min(max(height, 1), MAX_CANVAS_PX),
+    )
 
 
 @dataclass(frozen=True)
@@ -93,6 +123,7 @@ class HomeViewModel:
             Task(name="Business Card", canvas_size=(1050, 600)),
         ]
         self.projects: list[Project] = []
+        self._untitled_count = 0
 
     def list_categories(self) -> tuple[str, ...]:
         return self.CATEGORIES
@@ -102,8 +133,14 @@ class HomeViewModel:
             return self.PRESETS
         return [preset for preset in self.PRESETS if preset.category == category]
 
-    def add_task(self, name: str, canvas_size: tuple[int, int]) -> Task:
-        task = Task(name=name, canvas_size=canvas_size)
+    def add_task(self, canvas_size: tuple[int, int], name: str | None = None) -> Task:
+        """Create a blank-canvas task. Without an explicit name, auto-generates
+        a sequential "Untitled Design N" -- the counter only ever increases, so
+        names stay unique even after earlier tasks are deleted."""
+        if name is None:
+            self._untitled_count += 1
+            name = f"Untitled Design {self._untitled_count}"
+        task = Task(name=name, canvas_size=_clamp_canvas_size(canvas_size))
         self.tasks.append(task)
         return task
 
@@ -119,7 +156,7 @@ class HomeViewModel:
         name, extension = os.path.splitext(original_filename)
         task = Task(
             name=name or original_filename,
-            canvas_size=(size.width(), size.height()),
+            canvas_size=_clamp_canvas_size((size.width(), size.height())),
             file_path=file_path,
             original_filename=original_filename,
             file_type=extension.lstrip(".").lower(),
@@ -146,4 +183,36 @@ class HomeViewModel:
         for task in self.tasks:
             if task.id == task_id:
                 task.project_id = project_id
+                return
+
+    def delete_task(self, task_id: str) -> None:
+        self.tasks = [task for task in self.tasks if task.id != task_id]
+
+    def rename_task(self, task_id: str, name: str) -> None:
+        for task in self.tasks:
+            if task.id == task_id:
+                task.name = name
+                task.modified_at = datetime.now()
+                return
+
+    def save_task_content(self, task_id: str, content: dict[str, Any]) -> None:
+        """Store a serialized editor snapshot (persistence.serialize_project)
+        on the task, so reopening it restores exactly what was left behind."""
+        for task in self.tasks:
+            if task.id == task_id:
+                task.content = content
+                task.modified_at = datetime.now()
+                return
+
+    def delete_project(self, project_id: str) -> None:
+        """Delete a project. Its tasks aren't deleted -- they become unassigned."""
+        self.projects = [project for project in self.projects if project.id != project_id]
+        for task in self.tasks:
+            if task.project_id == project_id:
+                task.project_id = None
+
+    def rename_project(self, project_id: str, name: str) -> None:
+        for project in self.projects:
+            if project.id == project_id:
+                project.name = name
                 return

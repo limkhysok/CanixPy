@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QPushButton, QLabel, QFileDialog
 from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
@@ -9,16 +10,7 @@ from src.features.editor.layout.layers_panel import LayersPanel
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
 
-LEFT_SIDEBAR_STYLE = f"""
-LeftSidebar {{
-    border-right: 1px solid {theme.BORDER};
-}}
-QLabel#sectionHeader {{
-    color: {theme.TEXT_SECONDARY};
-    font-size: 11px;
-    font-weight: 700;
-}}
-"""
+LEFT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("left_sidebar.qss"))
 
 SHAPE_ICONS = {
     "Rectangle": "fa5s.square",

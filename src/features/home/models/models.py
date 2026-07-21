@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 
 def _new_id() -> str:
@@ -25,6 +26,9 @@ class Task:
     original_filename: str | None = None
     file_type: str | None = None
     file_size: int | None = None
+    content: dict[str, Any] | None = None
+    """Serialized editor project data (see persistence.serialize_project),
+    written back when the user leaves the editor. None until then."""
 
     @property
     def is_imported(self) -> bool:

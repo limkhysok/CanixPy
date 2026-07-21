@@ -1,0 +1,16 @@
+QWidget#layerRow[selected="true"] {
+    background-color: $ACCENT_LIGHT;
+    border-radius: 6px;
+}
+QLabel#layerName {
+    color: $TEXT_PRIMARY;
+}
+QPushButton#layerToggle {
+    background-color: transparent;
+    border: none;
+    padding: 0px;
+}
+QPushButton#layerToggle:hover {
+    background-color: $BORDER;
+    border-radius: 4px;
+}

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import icons, theme
+from src.core.text import pluralize
 from src.features.home.models.models import Project
 from src.features.home.viewmodels.home_viewmodel import HomeViewModel
 
@@ -75,6 +78,8 @@ class ProjectPage(QWidget):
         self.project_list.setIconSize(self.project_list.iconSize() * 1.2)
         self.project_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.project_list.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self.project_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.project_list.customContextMenuRequested.connect(self._on_project_context_menu)
         layout.addWidget(self.project_list)
 
         return page
@@ -84,7 +89,7 @@ class ProjectPage(QWidget):
         projects = self.viewmodel.projects
 
         count = len(projects)
-        self.project_count.setText(f"{count} project{'s' if count != 1 else ''}")
+        self.project_count.setText(pluralize(count, "project"))
 
         if not projects:
             placeholder = QListWidgetItem(
@@ -97,7 +102,7 @@ class ProjectPage(QWidget):
         else:
             for project in projects:
                 task_count = len(self.viewmodel.tasks_in_project(project.id))
-                label = f"{project.name}   ·   {task_count} task{'s' if task_count != 1 else ''}"
+                label = f"{project.name}   ·   {pluralize(task_count, 'task')}"
                 item = QListWidgetItem(icons.icon("fa5s.folder", color=theme.ACCENT), label)
                 item.setData(Qt.ItemDataRole.UserRole, project)
                 self.project_list.addItem(item)
@@ -114,6 +119,52 @@ class ProjectPage(QWidget):
             self.project = project
             self._refresh_detail()
             self._stack.setCurrentWidget(self._detail_widget)
+
+    def _on_project_context_menu(self, pos: QPoint) -> None:
+        item = self.project_list.itemAt(pos)
+        if item is None:
+            return
+        project = item.data(Qt.ItemDataRole.UserRole)
+        if project is None:
+            return
+
+        menu = QMenu(self)
+        rename_action = menu.addAction(icons.icon("fa5s.edit", color=theme.TEXT_SECONDARY), "Rename")
+        delete_action = menu.addAction(icons.icon("fa5s.trash", color=theme.TEXT_SECONDARY), "Delete")
+        chosen = menu.exec(self.project_list.viewport().mapToGlobal(pos))
+        if chosen is rename_action:
+            self._rename_project(project)
+        elif chosen is delete_action:
+            self._delete_project(project)
+
+    def _rename_project(self, project: Project) -> None:
+        name, ok = QInputDialog.getText(self, "Rename Project", "Project name:", text=project.name)
+        if ok and name.strip():
+            self.viewmodel.rename_project(project.id, name.strip())
+            self._refresh_list()
+            if self.project is project:
+                self._refresh_detail()
+
+    def _delete_project(self, project: Project) -> None:
+        task_count = len(self.viewmodel.tasks_in_project(project.id))
+        message = f'Delete "{project.name}"?'
+        if task_count:
+            message += f" Its {pluralize(task_count, 'task')} will become unassigned, not deleted."
+        reply = QMessageBox.question(
+            self,
+            "Delete Project",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        self.viewmodel.delete_project(project.id)
+        if self.project is project:
+            self.show_list()
+        else:
+            self._refresh_list()
 
     # -- detail page --------------------------------------------------------
 
@@ -137,6 +188,11 @@ class ProjectPage(QWidget):
         self.detail_task_list = QListWidget()
         self.detail_task_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.detail_task_list)
+
+        btn_remove = QPushButton(icons.icon("fa5s.arrow-left"), "Remove selected task from project")
+        btn_remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_remove.clicked.connect(self._on_remove_task)
+        layout.addWidget(btn_remove)
 
         layout.addWidget(QLabel("Unassigned tasks (select one to move here):"))
         self.unassigned_list = QListWidget()
@@ -166,7 +222,9 @@ class ProjectPage(QWidget):
             for task in tasks_in_project:
                 width, height = task.canvas_size
                 text = f"{task.name}   ·   {width} x {height}"
-                self.detail_task_list.addItem(QListWidgetItem(icons.icon(TASK_ICON, color=theme.ACCENT), text))
+                item = QListWidgetItem(icons.icon(TASK_ICON, color=theme.ACCENT), text)
+                item.setData(Qt.ItemDataRole.UserRole, task)
+                self.detail_task_list.addItem(item)
 
         self.unassigned_list.clear()
         unassigned = self.viewmodel.unassigned_tasks()
@@ -190,6 +248,17 @@ class ProjectPage(QWidget):
         if task is None:
             return
         self.viewmodel.move_task_to_project(task.id, self.project.id)
+        self._refresh_detail()
+        self._refresh_list()
+
+    def _on_remove_task(self) -> None:
+        item = self.detail_task_list.currentItem()
+        if item is None:
+            return
+        task = item.data(Qt.ItemDataRole.UserRole)
+        if task is None:
+            return
+        self.viewmodel.move_task_to_project(task.id, None)
         self._refresh_detail()
         self._refresh_list()
 

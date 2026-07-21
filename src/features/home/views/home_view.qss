@@ -1,0 +1,26 @@
+QLabel#pageTitle {
+    font-size: 36px;
+    font-weight: 500;
+    color: $TEXT_PRIMARY;
+}
+QLabel#sectionHeader {
+    font-size: 20px;
+    font-weight: 500;
+    color: $TEXT_PRIMARY;
+}
+QLabel#sectionCount {
+    color: $TEXT_SECONDARY;
+    font-size: 13px;
+}
+QLabel#hintText {
+    color: $TEXT_SECONDARY;
+    font-size: 12px;
+}
+QListWidget {
+    padding: 6px;
+}
+QListWidget::item {
+    padding: 12px 10px;
+    border-bottom: 1px solid $BORDER;
+    font-size: 15px;
+}

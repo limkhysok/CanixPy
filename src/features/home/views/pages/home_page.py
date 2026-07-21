@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QMouseEvent, QResizeEvent
+from PySide6.QtGui import QBrush, QColor, QContextMenuEvent, QMouseEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSizePolicy,
@@ -18,50 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import icons, theme
+from src.core.text import pluralize
 from src.features.home.models.models import Task
 from src.features.home.viewmodels.home_viewmodel import HomeViewModel
 from src.features.home.views.widgets.canvas_size_dialog import CanvasSizeDialog
 
-RECENT_PAGE_STYLE = f"""
-QListWidget#recentList {{
-    padding: 0px;
-    border: none;
-    outline: none;
-}}
-QListWidget#recentList::item {{
-    padding: 0px;
-    border: none;
-    outline: none;
-}}
-QListWidget#recentList::item:focus {{
-    outline: none;
-    border: none;
-}}
-QWidget#recentCard {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 8px;
-}}
-QWidget#recentCard:hover {{
-    background-color: {theme.ACCENT_LIGHT};
-    border: 1px solid {theme.ACCENT};
-}}
-QLabel#recentThumbnail {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-radius: 6px;
-}}
-QLabel#recentCardTitle {{
-    background-color: transparent;
-    font-size: 17px;
-    font-weight: 500;
-    color: {theme.TEXT_PRIMARY};
-}}
-QLabel#recentCardMeta {{
-    background-color: transparent;
-    font-size: 12px;
-    color: {theme.TEXT_SECONDARY};
-}}
-"""
+RECENT_PAGE_STYLE = theme.load_qss(Path(__file__).with_name("home_page.qss"))
 
 TASK_ICON = "fa5s.file-alt"
 IMPORTED_TASK_ICON = "fa5s.image"
@@ -98,6 +63,8 @@ class _RecentTaskCard(QWidget):
     """A single recent-task card: thumbnail, then title / size / edited-time rows."""
 
     activated = Signal()
+    rename_requested = Signal()
+    delete_requested = Signal()
 
     def __init__(self, task: Task, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -150,6 +117,16 @@ class _RecentTaskCard(QWidget):
         super().mouseDoubleClickEvent(event)
         self.activated.emit()
 
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        menu = QMenu(self)
+        rename_action = menu.addAction(icons.icon("fa5s.edit", color=theme.TEXT_SECONDARY), "Rename")
+        delete_action = menu.addAction(icons.icon("fa5s.trash", color=theme.TEXT_SECONDARY), "Delete")
+        chosen = menu.exec(event.globalPos())
+        if chosen is rename_action:
+            self.rename_requested.emit()
+        elif chosen is delete_action:
+            self.delete_requested.emit()
+
 
 def _format_relative_time(when: datetime) -> str:
     """Humanize a timestamp relative to now, e.g. '5 minutes ago'."""
@@ -172,8 +149,9 @@ def _format_relative_time(when: datetime) -> str:
 class HomePage(QWidget):
     """The Home page: New Design button plus a grid of recent-task cards."""
 
-    # width, height, image_path -- image_path is "" for a blank New Design canvas.
-    open_editor = Signal(int, int, str)
+    # Carries the Task being opened, so the editor can restore its saved
+    # content (if any) and write back to the same task on close.
+    open_editor = Signal(object)
 
     def __init__(self, viewmodel: HomeViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -247,7 +225,7 @@ class HomePage(QWidget):
         tasks = self.viewmodel.recent_tasks()
 
         count = len(tasks)
-        self.section_count.setText(f"{count} design{'s' if count != 1 else ''}")
+        self.section_count.setText(pluralize(count, "design"))
 
         if not tasks:
             placeholder = QListWidgetItem(
@@ -267,6 +245,8 @@ class HomePage(QWidget):
 
             card = _RecentTaskCard(task)
             card.activated.connect(lambda task=task: self._open_recent_task(task))
+            card.rename_requested.connect(lambda task=task: self._rename_task(task))
+            card.delete_requested.connect(lambda task=task: self._delete_task(task))
             self.recent_list.setItemWidget(item, card)
 
         self._update_recent_card_sizes()
@@ -296,17 +276,33 @@ class HomePage(QWidget):
             self.recent_list.item(index).setSizeHint(QSize(card_width, RECENT_CARD_HEIGHT))
 
     def _open_recent_task(self, task: Task) -> None:
-        width, height = task.canvas_size
-        self.open_editor.emit(width, height, task.file_path or "")
+        self.open_editor.emit(task)
+
+    def _rename_task(self, task: Task) -> None:
+        name, ok = QInputDialog.getText(self, "Rename Design", "Name:", text=task.name)
+        if ok and name.strip():
+            self.viewmodel.rename_task(task.id, name.strip())
+            self.refresh()
+
+    def _delete_task(self, task: Task) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Delete Design",
+            f'Delete "{task.name}"? This can\'t be undone.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.viewmodel.delete_task(task.id)
+            self.refresh()
 
     def _on_new_design(self) -> None:
         dialog = CanvasSizeDialog(self.viewmodel, self)
         if dialog.exec() == CanvasSizeDialog.DialogCode.Accepted:
             width, height = dialog.selected_size()
-            name = f"Untitled Design {len(self.viewmodel.tasks) + 1}"
-            self.viewmodel.add_task(name, (width, height))
+            task = self.viewmodel.add_task((width, height))
             self.refresh()
-            self.open_editor.emit(width, height, "")
+            self.open_editor.emit(task)
 
     def _on_import_image(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(self, IMPORT_IMAGE_LABEL, "", IMAGE_FILE_FILTER)
@@ -319,5 +315,4 @@ class HomePage(QWidget):
             return
 
         self.refresh()
-        width, height = task.canvas_size
-        self.open_editor.emit(width, height, file_path)
+        self.open_editor.emit(task)

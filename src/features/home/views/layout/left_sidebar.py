@@ -1,63 +1,13 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QEasingCurve, QSize, Signal, Qt, QVariantAnimation
 from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from src.core import icons, theme
 
-LEFT_SIDEBAR_STYLE = f"""
-LeftSidebar {{
-    background-color: {theme.SURFACE};
-    border-right: 1px solid {theme.BORDER};
-}}
-QPushButton#navButton {{
-    background-color: transparent;
-    border: none;
-    outline: none;
-    border-radius: 8px;
-}}
-QPushButton#navButton:focus {{
-    outline: none;
-    border: none;
-}}
-QPushButton#navButton:hover {{
-    background-color: {theme.BORDER};
-}}
-QPushButton#navButton:checked {{
-    background-color: {theme.ACCENT_LIGHT};
-}}
-QLabel#navButtonLabel {{
-    background: transparent;
-    font-size: 17px;
-    padding-top: 4px;
-}}
-QLabel#navButtonIcon {{
-    background: transparent;
-}}
-QWidget#profileFooter {{
-    border-top: 1px solid {theme.BORDER};
-    border-right: 1px solid {theme.BORDER};
-}}
-QLabel#profileAvatar {{
-    background: transparent;
-}}
-QLabel#profileName {{
-    background: transparent;
-    font-size: 14px;
-    font-weight: 600;
-    color: {theme.TEXT_PRIMARY};
-    padding-top: 2px;
-}}
-QPushButton#profileSettingsButton {{
-    background-color: transparent;
-    border: none;
-    outline: none;
-    border-radius: 6px;
-}}
-QPushButton#profileSettingsButton:hover {{
-    background-color: {theme.BORDER};
-}}
-"""
+LEFT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("left_sidebar.qss"))
 
 ICON_SIZE = QSize(18, 18)
 SETTINGS_BUTTON_SIZE = QSize(28, 28)

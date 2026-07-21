@@ -1,0 +1,38 @@
+QListWidget#recentList {
+    padding: 0px;
+    border: none;
+    outline: none;
+}
+QListWidget#recentList::item {
+    padding: 0px;
+    border: none;
+    outline: none;
+}
+QListWidget#recentList::item:focus {
+    outline: none;
+    border: none;
+}
+QWidget#recentCard {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+}
+QWidget#recentCard:hover {
+    background-color: $ACCENT_LIGHT;
+    border: 1px solid $ACCENT;
+}
+QLabel#recentThumbnail {
+    background-color: $ACCENT_LIGHT;
+    border-radius: 6px;
+}
+QLabel#recentCardTitle {
+    background-color: transparent;
+    font-size: 17px;
+    font-weight: 500;
+    color: $TEXT_PRIMARY;
+}
+QLabel#recentCardMeta {
+    background-color: transparent;
+    font-size: 12px;
+    color: $TEXT_SECONDARY;
+}

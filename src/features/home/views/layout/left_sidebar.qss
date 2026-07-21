@@ -1,0 +1,51 @@
+LeftSidebar {
+    background-color: $SURFACE;
+    border-right: 1px solid $BORDER;
+}
+QPushButton#navButton {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    border-radius: 8px;
+}
+QPushButton#navButton:focus {
+    outline: none;
+    border: none;
+}
+QPushButton#navButton:hover {
+    background-color: $BORDER;
+}
+QPushButton#navButton:checked {
+    background-color: $ACCENT_LIGHT;
+}
+QLabel#navButtonLabel {
+    background: transparent;
+    font-size: 17px;
+    padding-top: 4px;
+}
+QLabel#navButtonIcon {
+    background: transparent;
+}
+QWidget#profileFooter {
+    border-top: 1px solid $BORDER;
+    border-right: 1px solid $BORDER;
+}
+QLabel#profileAvatar {
+    background: transparent;
+}
+QLabel#profileName {
+    background: transparent;
+    font-size: 14px;
+    font-weight: 600;
+    color: $TEXT_PRIMARY;
+    padding-top: 2px;
+}
+QPushButton#profileSettingsButton {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    border-radius: 6px;
+}
+QPushButton#profileSettingsButton:hover {
+    background-color: $BORDER;
+}

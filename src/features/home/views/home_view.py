@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 
@@ -12,40 +14,13 @@ from src.features.home.views.pages.project_page import ProjectPage
 
 # Shared chrome for every page hosted in `self.pages` -- page-specific styling
 # (e.g. the recent-task cards) lives on the page widget itself instead.
-CONTENT_STYLE = f"""
-QLabel#pageTitle {{
-    font-size: 36px;
-    font-weight: 500;
-    color: {theme.TEXT_PRIMARY};
-}}
-QLabel#sectionHeader {{
-    font-size: 20px;
-    font-weight: 500;
-    color: {theme.TEXT_PRIMARY};
-}}
-QLabel#sectionCount {{
-    color: {theme.TEXT_SECONDARY};
-    font-size: 13px;
-}}
-QLabel#hintText {{
-    color: {theme.TEXT_SECONDARY};
-    font-size: 12px;
-}}
-QListWidget {{
-    padding: 6px;
-}}
-QListWidget::item {{
-    padding: 12px 10px;
-    border-bottom: 1px solid {theme.BORDER};
-    font-size: 15px;
-}}
-"""
+CONTENT_STYLE = theme.load_qss(Path(__file__).with_name("home_view.qss"))
 
 
 class HomeView(QWidget):
     """The Home Screen shell: left nav (Home / Projects / ...) plus the active page."""
 
-    open_editor = Signal(int, int, str)
+    open_editor = Signal(object)  # carries the Task being opened
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)

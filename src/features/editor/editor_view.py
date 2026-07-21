@@ -235,9 +235,12 @@ class CoreDesignApp(QMainWindow):
         if not file_path:
             return
         data = persistence.load_project_data(file_path)
-        self._apply_project_data(data)
+        self.apply_project_data(data)
 
-    def _apply_project_data(self, data: dict[str, Any]) -> None:
+    def apply_project_data(self, data: dict[str, Any]) -> None:
+        """Replace all pages with a previously-serialized project (see
+        persistence.serialize_project). Used both by File > Open and by the
+        Home screen restoring a task's saved editor content."""
         canvas_size = data.get("canvas_size")
         if canvas_size and len(canvas_size) == 2:
             self.canvas_size = (int(canvas_size[0]), int(canvas_size[1]))

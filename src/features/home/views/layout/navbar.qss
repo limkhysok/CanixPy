@@ -1,0 +1,12 @@
+Navbar {
+    border-bottom: 1px solid $BORDER;
+}
+QPushButton#toggleButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 8px;
+}
+QPushButton#toggleButton:hover {
+    background-color: $BORDER;
+}

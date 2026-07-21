@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 from typing import TYPE_CHECKING
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QPushButton, QFontComboBox, QSlider, QSpinBox
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsItem, QGraphicsItemGroup
@@ -10,29 +11,7 @@ from src.features.editor.properties_viewmodel import PropertiesPanelViewModel
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
 
-RIGHT_SIDEBAR_STYLE = f"""
-PropertiesPanel {{
-    border-left: 1px solid {theme.BORDER};
-}}
-QLabel#panelTitle {{
-    color: {theme.TEXT_PRIMARY};
-    font-size: 14px;
-    font-weight: 600;
-}}
-QLabel#sectionHeader {{
-    color: {theme.TEXT_SECONDARY};
-    font-size: 11px;
-    font-weight: 700;
-}}
-QLabel#hintText {{
-    color: {theme.TEXT_SECONDARY};
-    font-size: 12px;
-}}
-QPushButton#toggleButton:checked {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-color: {theme.ACCENT};
-}}
-"""
+RIGHT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("right_sidebar.qss"))
 
 ICON_PALETTE = "fa5s.palette"
 ICON_ALIGN_CENTER = "fa5s.align-center"

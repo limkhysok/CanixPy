@@ -8,6 +8,9 @@ opt in via the Qt dynamic property `accent`, e.g.
 """
 from __future__ import annotations
 
+from pathlib import Path
+from string import Template
+
 # Backgrounds
 BACKGROUND = "#FFFFFF"
 SURFACE = "#FFFFFF"  # used for side panels/hover states
@@ -24,6 +27,15 @@ ACCENT_LIGHT = "#E6EBDD"  # light tint for subtle selected/hover backgrounds
 TEXT_PRIMARY = "#2B2320"
 TEXT_SECONDARY = "#7A6F68"
 TEXT_ON_ACCENT = "#FFFFFF"
+
+
+def load_qss(path: str | Path) -> str:
+    """Read a .qss file and substitute $TOKEN placeholders (e.g. $ACCENT) with
+    this module's design tokens, so widget-level stylesheets can live in their
+    own files instead of as inline Python f-strings."""
+    text = Path(path).read_text(encoding="utf-8")
+    tokens = {name: value for name, value in globals().items() if name.isupper() and isinstance(value, str)}
+    return Template(text).substitute(tokens)
 
 
 def build_stylesheet() -> str:

@@ -233,7 +233,7 @@ def _deserialize_text(data: dict[str, Any]) -> QGraphicsItem:
 
 def _deserialize_image(data: dict[str, Any]) -> QGraphicsItem:
     pixmap = QPixmap()
-    pixmap.loadFromData(base64.b64decode(data["png_base64"]), b"PNG")
+    pixmap.loadFromData(base64.b64decode(data["png_base64"]), "PNG")
     item = ResizablePixmapItem(pixmap)
     item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
     item.setScale(data.get("scale", 1.0))
