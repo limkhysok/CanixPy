@@ -7,6 +7,8 @@ from typing import Callable
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QFont,
+    QFontMetrics,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -234,11 +236,12 @@ QDialogButtonBox QPushButton {{
 }}
 """
 
-PRESET_SWATCH_MAX = 22
+PRESET_SWATCH_MAX = 24
 PRESET_SWATCH_MIN = 8
-PRESET_ICON_BOX = 44
-PRESET_GRID_COLUMNS = 2
-PRESET_CARD_MIN_HEIGHT = 100
+PRESET_ICON_BOX = 48
+PRESET_GRID_COLUMNS = 3
+PRESET_NAME_FONT_SIZE = 14
+PRESET_NAME_FONT_WEIGHT = QFont.Weight.DemiBold
 BACKDROP_BLUR_RADIUS = 18
 BACKDROP_BLUR_DOWNSCALE = 3
 BACKDROP_TINT_COLOR = "#1A1613"
@@ -422,13 +425,12 @@ class _PresetCard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("selected", False)
-        self.setMinimumHeight(PRESET_CARD_MIN_HEIGHT)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setToolTip(f"{preset.name} — {preset.width} x {preset.height} px")
+        self.setToolTip(f"{preset.name} — {preset.width} × {preset.height} px")
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 16, 14, 14)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         icon_box = QWidget()
@@ -448,14 +450,26 @@ class _PresetCard(QWidget):
 
         name_label = QLabel(preset.name)
         name_label.setObjectName("presetName")
-        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         name_label.setWordWrap(True)
+        # Fixed to exactly two text lines so a long name (e.g. "Facebook Event
+        # Cover") and a short one (e.g. "Default") still produce identically
+        # sized cards -- otherwise cards wrap unevenly and rows look ragged.
+        name_font = QFont()
+        name_font.setPixelSize(PRESET_NAME_FONT_SIZE)
+        name_font.setWeight(PRESET_NAME_FONT_WEIGHT)
+        name_label.setFixedHeight(QFontMetrics(name_font).lineSpacing() * 2)
         layout.addWidget(name_label)
 
-        dims_label = QLabel(f"{preset.width} x {preset.height} px")
+        dims_label = QLabel(f"{preset.width} × {preset.height} px")
         dims_label.setObjectName("presetDims")
         dims_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(dims_label)
+
+        # Lock in the height every card now naturally computes to (all inner
+        # parts above are fixed-size), so the grid's rows line up evenly
+        # instead of stretching short cards to match a taller row-mate.
+        self.setFixedHeight(self.sizeHint().height())
 
     def set_selected(self, selected: bool) -> None:
         self.setProperty("selected", selected)
