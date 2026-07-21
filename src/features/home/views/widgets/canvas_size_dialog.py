@@ -22,8 +22,10 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QButtonGroup,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFrame,
     QGraphicsBlurEffect,
     QGraphicsPixmapItem,
@@ -33,7 +35,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QSpinBox,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -88,7 +90,7 @@ QLabel#sectionLabel {{
     color: {theme.TEXT_SECONDARY};
 }}
 QLabel#hintLabel {{
-    font-size: 11px;
+    font-size: 12px;
     color: {theme.TEXT_SECONDARY};
 }}
 QScrollArea#categoryScroll, QScrollArea#presetScroll {{
@@ -160,7 +162,7 @@ QWidget#customSizeSection[active="true"] {{
     border: 2px solid {theme.ACCENT};
 }}
 QWidget#customSizeSection QLabel#fieldLabel {{
-    font-size: 11px;
+    font-size: 12px;
     color: {theme.TEXT_SECONDARY};
 }}
 QWidget#spinField {{
@@ -171,14 +173,52 @@ QWidget#spinField {{
 QWidget#spinField[focused="true"] {{
     border: 1px solid {theme.ACCENT};
 }}
-QSpinBox#spinFieldInput {{
+QDoubleSpinBox#spinFieldInput {{
     background-color: transparent;
     border: none;
-    font-size: 14px;
+    font-size: 15px;
     padding: 6px 0px;
 }}
-QSpinBox#spinFieldInput:focus {{
+QDoubleSpinBox#spinFieldInput:focus {{
     outline: none;
+}}
+QWidget#unitField {{
+    background-color: {theme.BACKGROUND};
+    border: 1px solid {theme.BORDER};
+    border-radius: 8px;
+}}
+QWidget#unitField[focused="true"] {{
+    border: 1px solid {theme.ACCENT};
+}}
+QComboBox#unitFieldInput {{
+    background-color: transparent;
+    border: none;
+    font-size: 15px;
+    padding: 6px 0px;
+}}
+QComboBox#unitFieldInput:focus {{
+    outline: none;
+}}
+QComboBox#unitFieldInput::drop-down {{
+    border: none;
+    width: 0px;
+}}
+QComboBox#unitFieldInput::down-arrow {{
+    image: none;
+    width: 0px;
+    height: 0px;
+}}
+QComboBox#unitFieldInput QAbstractItemView {{
+    background-color: {theme.BACKGROUND};
+    border: 1px solid {theme.BORDER};
+    outline: none;
+    padding: 4px;
+    selection-background-color: {theme.ACCENT_LIGHT};
+    selection-color: {theme.TEXT_PRIMARY};
+}}
+QComboBox#unitFieldInput QAbstractItemView::item {{
+    padding: 4px 10px;
+    border-radius: 6px;
 }}
 QToolButton#spinStepButton {{
     background-color: transparent;
@@ -205,20 +245,6 @@ QWidget#customPreviewBox {{
 QLabel#customPreviewSwatch {{
     background-color: {theme.ACCENT};
     border-radius: 3px;
-}}
-QPushButton#swapButton {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 6px;
-    padding: 0px;
-    min-height: 0px;
-}}
-QPushButton#swapButton:hover {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-color: {theme.ACCENT};
-}}
-QPushButton#swapButton:pressed {{
-    background-color: {theme.ACCENT_LIGHT};
 }}
 QFrame#footerDivider {{
     background-color: {theme.BORDER};
@@ -255,6 +281,18 @@ BACKDROP_BLUR_RADIUS = 18
 BACKDROP_BLUR_DOWNSCALE = 3
 BACKDROP_TINT_COLOR = "#1A1613"
 BACKDROP_TINT_ALPHA = 90
+
+MAX_CANVAS_PX = 10000
+
+# Pixels-per-unit at the standard 96 DPI screen-design reference (the same
+# reference Canva/Figma use), so a width typed as "1 in" maps to 96 px.
+UNIT_PX_PER_UNIT: dict[str, float] = {
+    "px": 1.0,
+    "in": 96.0,
+    "mm": 96.0 / 25.4,
+    "cm": 96.0 / 2.54,
+}
+UNIT_DECIMALS: dict[str, int] = {"px": 0, "in": 2, "mm": 1, "cm": 2}
 
 
 def _swatch_size(width: int, height: int) -> tuple[int, int]:
@@ -348,24 +386,29 @@ class _BlurBackdrop(QWidget):
 
 class _SpinField(QWidget):
     """A numeric field with slim custom chevron steppers instead of the native
-    QSpinBox's cramped, dated-looking up/down buttons."""
+    QDoubleSpinBox's cramped, dated-looking up/down buttons. Uses a double
+    spin box (not an int one) even for whole-pixel values, since the same
+    field is reused to display fractional inch/mm/cm sizes when the unit
+    dropdown is switched off "px"."""
 
-    valueChanged = Signal(int)
+    valueChanged = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("spinField")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setProperty("focused", False)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 0, 4, 0)
         layout.setSpacing(2)
 
-        self.spin = QSpinBox()
+        self.spin = QDoubleSpinBox()
         self.spin.setObjectName("spinFieldInput")
         self.spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.spin.setFrame(False)
+        self.spin.setDecimals(0)
         self.spin.installEventFilter(self)
         self.spin.valueChanged.connect(self.valueChanged)
         layout.addWidget(self.spin, 1)
@@ -405,21 +448,120 @@ class _SpinField(QWidget):
         self.style().polish(self)
         self.update()
 
-    def setRange(self, minimum: int, maximum: int) -> None:
+    def setRange(self, minimum: float, maximum: float) -> None:
         self.spin.setRange(minimum, maximum)
 
     def setSuffix(self, suffix: str) -> None:
         self.spin.setSuffix(suffix)
 
-    def setValue(self, value: int) -> None:
+    def setDecimals(self, decimals: int) -> None:
+        self.spin.setDecimals(decimals)
+
+    def setValue(self, value: float) -> None:
         self.spin.setValue(value)
 
-    def value(self) -> int:
+    def value(self) -> float:
         return self.spin.value()
 
     def blockSignals(self, block: bool) -> bool:
         self.spin.blockSignals(block)
         return super().blockSignals(block)
+
+
+UNIT_FIELD_CHEVRON_SIZE = 8
+UNIT_FIELD_MIN_WIDTH = 92
+
+
+class _UnitCombo(QComboBox):
+    """QComboBox that pins its popup to its own width -- Qt's default popup
+    sizing instead follows the widest item text, which for short unit labels
+    like "px"/"in" leaves the dropdown narrower than the field itself."""
+
+    def showPopup(self) -> None:
+        self.view().setFixedWidth(self.width())
+        # The popup's own top-level window is opaque by default, so the
+        # QSS border-radius on the view paints rounded content over square
+        # window corners -- same square-corner-under-rounded-shape issue
+        # CanvasSizeDialog itself works around, just one level down.
+        self.view().window().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        super().showPopup()
+
+
+class _UnitField(QWidget):
+    """A unit dropdown styled to match _SpinField's bordered container: a
+    QComboBox's native drop-down arrow is unstyleable to match the dialog's
+    fontawesome iconography, so it's hidden and replaced with the same
+    chevron icon the spin steppers use."""
+
+    currentTextChanged = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("unitField")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setProperty("focused", False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumWidth(UNIT_FIELD_MIN_WIDTH)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 8, 0)
+        layout.setSpacing(4)
+
+        self.combo = _UnitCombo()
+        self.combo.setObjectName("unitFieldInput")
+        self.combo.setFrame(False)
+        self.combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.combo.installEventFilter(self)
+        self.combo.currentTextChanged.connect(self.currentTextChanged)
+        layout.addWidget(self.combo, 1)
+
+        self._chevron = QLabel()
+        self._chevron.setPixmap(
+            icons.icon("fa5s.chevron-down", color=theme.TEXT_SECONDARY).pixmap(
+                UNIT_FIELD_CHEVRON_SIZE, UNIT_FIELD_CHEVRON_SIZE
+            )
+        )
+        self._chevron.installEventFilter(self)
+        layout.addWidget(self._chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.combo:
+            if event.type() == QEvent.Type.FocusIn:
+                self._set_focused(True)
+            elif event.type() == QEvent.Type.FocusOut:
+                self._set_focused(False)
+        elif watched is self._chevron and event.type() == QEvent.Type.MouseButtonPress:
+            # The chevron is a plain QLabel sitting outside the QComboBox's own
+            # geometry, so clicks on it never reach the combo -- forward them
+            # here so the visible arrow is actually clickable, not a dead zone.
+            self.combo.showPopup()
+            return True
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        # Clicking the field's own padding (outside both the combo and the
+        # chevron) should also open the dropdown, matching the pointing-hand
+        # cursor set over the whole field.
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.combo.showPopup()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def _set_focused(self, focused: bool) -> None:
+        self.setProperty("focused", focused)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def addItems(self, items: list[str]) -> None:
+        self.combo.addItems(items)
+
+    def setCurrentText(self, text: str) -> None:
+        self.combo.setCurrentText(text)
+
+    def currentText(self) -> str:
+        return self.combo.currentText()
 
 
 CATEGORY_CHIP_RADIUS = 15
@@ -698,44 +840,51 @@ class CanvasSizeDialog(QDialog):
         custom_grid = QGridLayout()
         custom_grid.setHorizontalSpacing(10)
         custom_grid.setVerticalSpacing(4)
+        # Width/Height stretch to fill whatever space is left; the separator
+        # and unit dropdown stay at their natural size -- so the row as a
+        # whole spans edge-to-edge instead of leaving dead space on the right.
+        custom_grid.setColumnStretch(0, 1)
+        custom_grid.setColumnStretch(2, 1)
 
         width_field_label = QLabel("Width")
         width_field_label.setObjectName("fieldLabel")
         height_field_label = QLabel("Height")
         height_field_label.setObjectName("fieldLabel")
+        unit_field_label = QLabel("Unit")
+        unit_field_label.setObjectName("fieldLabel")
         custom_grid.addWidget(width_field_label, 0, 0)
         custom_grid.addWidget(height_field_label, 0, 2)
+        custom_grid.addWidget(unit_field_label, 0, 3)
 
         self.width_box = _SpinField()
-        self.width_box.setRange(1, 10000)
-        self.width_box.setSuffix(" px")
-        self.width_box.setFixedWidth(128)
         self.width_box.valueChanged.connect(self._on_custom_changed)
 
         self.height_box = _SpinField()
-        self.height_box.setRange(1, 10000)
-        self.height_box.setSuffix(" px")
-        self.height_box.setFixedWidth(128)
         self.height_box.valueChanged.connect(self._on_custom_changed)
 
         separator = QLabel("×")
         separator.setObjectName("customSizeSeparator")
         separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        self.unit_combo = _UnitField()
+        self.unit_combo.addItems(list(UNIT_PX_PER_UNIT))
+        self.unit_combo.currentTextChanged.connect(self._on_unit_changed)
+
         custom_grid.addWidget(self.width_box, 1, 0)
         custom_grid.addWidget(separator, 1, 1)
         custom_grid.addWidget(self.height_box, 1, 2)
-        content_row.addLayout(custom_grid)
-
-        swap_button = QPushButton(icons.icon("fa5s.exchange-alt", color=theme.TEXT_SECONDARY), "")
-        swap_button.setObjectName("swapButton")
-        swap_button.setFixedSize(34, 34)
-        swap_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        swap_button.setToolTip("Swap width and height")
-        swap_button.clicked.connect(self._on_swap_clicked)
-        content_row.addWidget(swap_button, alignment=Qt.AlignmentFlag.AlignBottom)
-        content_row.addStretch(1)
+        custom_grid.addWidget(self.unit_combo, 1, 3)
+        content_row.addLayout(custom_grid, 1)
         custom_layout.addLayout(content_row)
+
+        self._unit = "px"
+        self.width_box.blockSignals(True)
+        self.height_box.blockSignals(True)
+        self._configure_spin_fields_for_unit()
+        self.width_box.setValue(self._px_to_unit(self._selected_size[0]))
+        self.height_box.setValue(self._px_to_unit(self._selected_size[1]))
+        self.width_box.blockSignals(False)
+        self.height_box.blockSignals(False)
 
         self.hint_label = QLabel()
         self.hint_label.setObjectName("hintLabel")
@@ -824,8 +973,8 @@ class CanvasSizeDialog(QDialog):
     def _on_preset_clicked(self, preset: CanvasPreset, card: _PresetCard) -> None:
         self.width_box.blockSignals(True)
         self.height_box.blockSignals(True)
-        self.width_box.setValue(preset.width)
-        self.height_box.setValue(preset.height)
+        self.width_box.setValue(self._px_to_unit(preset.width))
+        self.height_box.setValue(self._px_to_unit(preset.height))
         self.width_box.blockSignals(False)
         self.height_box.blockSignals(False)
 
@@ -835,18 +984,43 @@ class CanvasSizeDialog(QDialog):
         self._selected_size = (preset.width, preset.height)
         self._update_custom_preview(preset.width, preset.height)
 
-    def _on_custom_changed(self, _value: int) -> None:
+    def _on_custom_changed(self, _value: float) -> None:
         for card in self._preset_cards:
             card.set_selected(False)
         self._set_custom_section_active(True)
-        width, height = self.width_box.value(), self.height_box.value()
+        width = self._unit_to_px(self.width_box.value())
+        height = self._unit_to_px(self.height_box.value())
         self._selected_size = (width, height)
         self._update_custom_preview(width, height)
 
-    def _on_swap_clicked(self) -> None:
-        width, height = self.width_box.value(), self.height_box.value()
-        self.width_box.setValue(height)
-        self.height_box.setValue(width)
+    def _on_unit_changed(self, unit: str) -> None:
+        # Capture the current size, and block signals, before touching range/
+        # decimals: setRange() clamps the field's still-old-unit value into
+        # the new unit's range and fires an unblocked valueChanged, which
+        # would otherwise clobber self._selected_size with a bogus clamp
+        # before we get a chance to write the correctly-converted value.
+        width_px, height_px = self._selected_size
+        self._unit = unit
+        self.width_box.blockSignals(True)
+        self.height_box.blockSignals(True)
+        self._configure_spin_fields_for_unit()
+        self.width_box.setValue(self._px_to_unit(width_px))
+        self.height_box.setValue(self._px_to_unit(height_px))
+        self.width_box.blockSignals(False)
+        self.height_box.blockSignals(False)
+
+    def _configure_spin_fields_for_unit(self) -> None:
+        decimals = UNIT_DECIMALS[self._unit]
+        for field in (self.width_box, self.height_box):
+            field.setDecimals(decimals)
+            field.setRange(self._px_to_unit(1), self._px_to_unit(MAX_CANVAS_PX))
+            field.setSuffix(f" {self._unit}")
+
+    def _px_to_unit(self, value_px: int) -> float:
+        return value_px / UNIT_PX_PER_UNIT[self._unit]
+
+    def _unit_to_px(self, value: float) -> int:
+        return round(value * UNIT_PX_PER_UNIT[self._unit])
 
     def _update_custom_preview(self, width: int, height: int) -> None:
         swatch_width, swatch_height = _swatch_size(width, height)
