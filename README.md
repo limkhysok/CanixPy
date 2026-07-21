@@ -1,27 +1,39 @@
 # CanixPy
 
-An open-source, lightweight alternative to Canvas built entirely in PyQt.
+An open-source, lightweight alternative to Canvas, built around a native desktop editor with an optional web/backend layer.
 
 ---
 
 ## 🎯 Purpose of the Project
 
-The core purpose of building **CanixPy** is to provide an ultra-fast, offline-first graphic canvas and photo editor that completely bypasses the overhead of modern web-based design platforms. 
+The core of **CanixPy** is `desktop_app/`: an ultra-fast, offline-first graphic canvas and photo editor that bypasses the overhead of browser-based design platforms. Double-click, drop an image or layout onto the canvas, edit quickly, and export — no account, no server required to use it.
 
-Instead of waiting for heavy browser engines to load, managing cloud accounts, or configuring complex backends, CanixPy allows users to simply launch `CanixPy.exe` and start editing immediately. It brings the speed and simplicity of traditional desktop utilities back to creative canvas tools.
+`backend/` (FastAPI) and `frontend/` (Next.js) are an in-progress, optional web layer for things the desktop app alone can't do (e.g. sync/sharing) — the desktop app does not depend on them.
 
-### Key Pillars
-* **Zero Overhead:** No backend, no server setups, and no web-browser bloat. Just pure, native desktop execution.
-* **Instant Utility:** Double-click, drop an image or layout onto the canvas, edit quickly, and export. 
+### Key Pillars (desktop_app)
+* **Zero Overhead:** No backend or web-browser bloat required for local editing. Just pure, native desktop execution.
+* **Instant Utility:** Double-click, drop an image or layout onto the canvas, edit quickly, and export.
 * **Extremely Low Resource Footprint:** Leverages C++ under the hood via Qt/PyQt to deliver smooth rendering and precise control while keeping RAM and CPU usage exceptionally low.
+
+---
+
+## 📁 Project Layout
+
+```
+CanixPy/
+├── desktop_app/   # PySide6 desktop editor (the core product)
+├── backend/       # FastAPI web API (placeholder, not yet implemented)
+└── frontend/      # Next.js web frontend (placeholder, not yet implemented)
+```
 
 ---
 
 ## 🚀 Running the App
 
-Install dependencies, then launch from the project root:
+Install dependencies, then launch from `desktop_app/`:
 
 ```bash
+cd desktop_app
 pip install -r requirements.txt
 python -m src.main
 ```
@@ -36,7 +48,7 @@ objects — no image assets to manage.
 
 **Important:** `qtawesome` resolves its Qt binding through `qtpy`. If both PySide6 and PyQt
 are installed in the same environment, `qtpy` may auto-detect the wrong one and break icon
-rendering. [`src/main.py`](src/main.py) sets `QT_API=pyside6` before any Qt import to force
+rendering. [`desktop_app/src/main.py`](desktop_app/src/main.py) sets `QT_API=pyside6` before any Qt import to force
 the correct binding — keep that line if you touch the entrypoint, and don't import
 `qtawesome` anywhere that could run before it (e.g. module-level in a file imported by
 `main.py` above that line).
