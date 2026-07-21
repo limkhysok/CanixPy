@@ -7,6 +7,7 @@ from typing import Callable
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
+    QEnterEvent,
     QFont,
     QFontMetrics,
     QKeyEvent,
@@ -52,6 +53,20 @@ CATEGORY_ICONS: dict[str, str] = {
     "YouTube": "fa5b.youtube",
 }
 
+# Each category icon's real brand/original color, used when its chip is unchecked.
+CATEGORY_ICON_COLORS: dict[str, str] = {
+    "Popular": "#FF6B35",
+    "Facebook": "#1877F2",
+    "Instagram": "#E4405F",
+    "LinkedIn": "#0A66C2",
+    "Pinterest": "#E60023",
+    "TikTok": "#000000",
+    "Twitter": "#1DA1F2",
+    "YouTube": "#FF0000",
+}
+
+CATEGORY_CHIP_ICON_SIZE = 14
+
 DIALOG_CORNER_RADIUS = 16
 
 DIALOG_STYLE = f"""
@@ -84,22 +99,16 @@ QScrollArea#categoryScroll QWidget#qt_scrollarea_viewport, QScrollArea#presetScr
     background-color: transparent;
 }}
 QPushButton#categoryChip {{
-    background-color: {theme.BACKGROUND};
-    border: 1px solid {theme.BORDER};
-    border-radius: 15px;
-    padding: 6px 14px;
-    font-size: 12px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 3px;
+}}
+QLabel#categoryChipText {{
+    font-size: 15px;
     font-weight: 500;
+    margin-top: 1px;
     color: {theme.TEXT_PRIMARY};
-}}
-QPushButton#categoryChip:hover {{
-    background-color: {theme.ACCENT_LIGHT};
-    border-color: {theme.ACCENT};
-}}
-QPushButton#categoryChip:checked {{
-    background-color: {theme.ACCENT};
-    border-color: {theme.ACCENT};
-    color: {theme.TEXT_ON_ACCENT};
 }}
 QWidget#presetCard {{
     background-color: {theme.BACKGROUND};
@@ -239,7 +248,7 @@ QDialogButtonBox QPushButton {{
 PRESET_SWATCH_MAX = 24
 PRESET_SWATCH_MIN = 8
 PRESET_ICON_BOX = 48
-PRESET_GRID_COLUMNS = 3
+PRESET_GRID_COLUMNS = 4
 PRESET_NAME_FONT_SIZE = 14
 PRESET_NAME_FONT_WEIGHT = QFont.Weight.DemiBold
 BACKDROP_BLUR_RADIUS = 18
@@ -413,6 +422,52 @@ class _SpinField(QWidget):
         return super().blockSignals(block)
 
 
+CATEGORY_CHIP_RADIUS = 15
+
+
+class _CategoryChip(QPushButton):
+    """QPushButton overridden to size itself from its child layout (the base
+    class computes its sizeHint purely from its own text/icon properties and
+    ignores any layout placed on it, which left chips clipped now that their
+    icon and label are child QLabels rather than the button's own text/icon)
+    and to paint its own rounded background: QSS border-radius is dropped
+    for the :checked state specifically once a child layout is involved, so
+    the pill background/border is drawn by hand instead, same workaround
+    CanvasSizeDialog itself already relies on for its own translucent window."""
+
+    def sizeHint(self) -> QSize:
+        layout = self.layout()
+        return layout.sizeHint() if layout is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        super().enterEvent(event)
+        self.update()
+
+    def leaveEvent(self, event: QEvent) -> None:
+        super().leaveEvent(event)
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if self.isChecked():
+            background, border = theme.ACCENT, theme.ACCENT
+        elif self.underMouse():
+            background, border = theme.ACCENT_LIGHT, theme.ACCENT
+        else:
+            background, border = theme.BACKGROUND, theme.BORDER
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(rect, CATEGORY_CHIP_RADIUS, CATEGORY_CHIP_RADIUS)
+        painter.setPen(QPen(QColor(border), 1))
+        painter.setBrush(QColor(background))
+        painter.drawPath(path)
+
+
 class _PresetCard(QWidget):
     """A large, keyboard-accessible card showing a preset's name, size, and aspect-ratio swatch."""
 
@@ -524,7 +579,7 @@ class CanvasSizeDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("New Design")
         self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
-        self.setMinimumWidth(920)
+        self.setMinimumWidth(1100)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(DIALOG_STYLE)
@@ -588,14 +643,7 @@ class CanvasSizeDialog(QDialog):
         self._category_group.setExclusive(True)
         categories = self.viewmodel.list_categories()
         for index, category in enumerate(categories):
-            chip = QPushButton(
-                icons.icon(CATEGORY_ICONS[category], color=theme.TEXT_SECONDARY, color_on=theme.TEXT_ON_ACCENT),
-                category,
-            )
-            chip.setObjectName("categoryChip")
-            chip.setCheckable(True)
-            chip.setChecked(index == 0)
-            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip = self._make_category_chip(category, checked=index == 0)
             chip.clicked.connect(partial(self._on_category_clicked, category))
             self._category_group.addButton(chip)
             category_row.addWidget(chip)
@@ -606,7 +654,7 @@ class CanvasSizeDialog(QDialog):
         self.preset_scroll = QScrollArea()
         self.preset_scroll.setObjectName("presetScroll")
         self.preset_scroll.setWidgetResizable(True)
-        self.preset_scroll.setFixedHeight(420)
+        self.preset_scroll.setFixedHeight(320)
         self.preset_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.preset_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.preset_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -716,6 +764,42 @@ class CanvasSizeDialog(QDialog):
         layout.addWidget(buttons)
 
         self._rebuild_preset_grid(categories[0])
+
+    def _make_category_chip(self, category: str, checked: bool) -> QPushButton:
+        # Built from child QLabels rather than QPushButton's native icon+text,
+        # since Qt's QStyleSheetStyle mis-centers the text vertically whenever
+        # a styled QPushButton carries both an icon and a label -- plain
+        # QLabels don't go through that painting path and center correctly.
+        chip = _CategoryChip()
+        chip.setObjectName("categoryChip")
+        chip.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        chip.setCheckable(True)
+        chip.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        chip_layout = QHBoxLayout(chip)
+        chip_layout.setContentsMargins(14, 6, 14, 6)
+        chip_layout.setSpacing(6)
+
+        icon_label = QLabel()
+        text_label = QLabel(category)
+        text_label.setObjectName("categoryChipText")
+        chip_layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        chip_layout.addWidget(text_label, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        def apply_state(is_checked: bool) -> None:
+            icon_color = theme.TEXT_ON_ACCENT if is_checked else CATEGORY_ICON_COLORS[category]
+            icon_label.setPixmap(
+                icons.icon(CATEGORY_ICONS[category], color=icon_color).pixmap(
+                    CATEGORY_CHIP_ICON_SIZE, CATEGORY_CHIP_ICON_SIZE
+                )
+            )
+            text_color = theme.TEXT_ON_ACCENT if is_checked else theme.TEXT_PRIMARY
+            text_label.setStyleSheet(f"color: {text_color};")
+
+        chip.toggled.connect(apply_state)
+        chip.setChecked(checked)
+        apply_state(checked)
+        return chip
 
     def _on_category_clicked(self, category: str) -> None:
         self._rebuild_preset_grid(category)
