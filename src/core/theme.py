@@ -40,12 +40,16 @@ def build_stylesheet() -> str:
         border: 1px solid {BORDER};
         border-radius: 6px;
         padding: 6px 14px;
+        outline: none;
     }}
     QPushButton:hover {{
         background-color: {SURFACE};
     }}
     QPushButton:pressed {{
         background-color: {BORDER};
+    }}
+    QPushButton:focus {{
+        outline: none;
     }}
 
     QPushButton[accent="true"] {{
