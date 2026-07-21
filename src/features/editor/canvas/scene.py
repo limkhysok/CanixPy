@@ -242,12 +242,13 @@ class DesignScene(QGraphicsScene):
         self.undo_stack.push(undo, redo)
 
     def add_image_item(self, file_path: str, pos: QPointF) -> None:
-        from PySide6.QtGui import QPixmap
         from PySide6.QtCore import Qt
 
-        pixmap = QPixmap(file_path)
-        if pixmap.isNull():
-            return  # Invalid image file
+        from src.core.image_loader import load_pixmap
+
+        pixmap = load_pixmap(file_path)
+        if pixmap is None:
+            return  # Unreadable or unsupported file
 
         # Create a native image graphics item
         item = ResizablePixmapItem(pixmap)

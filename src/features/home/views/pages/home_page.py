@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import icons, theme
+from src.core.image_loader import IMPORT_FILE_FILTER
 from src.core.text import pluralize
 from src.features.home.models.models import Task
 from src.features.home.viewmodels.home_viewmodel import HomeViewModel
@@ -30,7 +31,6 @@ RECENT_PAGE_STYLE = theme.load_qss(Path(__file__).with_name("home_page.qss"))
 
 TASK_ICON = "fa5s.file-alt"
 IMPORTED_TASK_ICON = "fa5s.image"
-IMAGE_FILE_FILTER = "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
 IMPORT_IMAGE_LABEL = "Import Image"
 
 RECENT_THUMBNAIL_HEIGHT = 64
@@ -305,13 +305,13 @@ class HomePage(QWidget):
             self.open_editor.emit(task)
 
     def _on_import_image(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(self, IMPORT_IMAGE_LABEL, "", IMAGE_FILE_FILTER)
+        file_path, _ = QFileDialog.getOpenFileName(self, IMPORT_IMAGE_LABEL, "", IMPORT_FILE_FILTER)
         if not file_path:
             return
 
         task = self.viewmodel.import_task(file_path)
         if task is None:
-            QMessageBox.warning(self, IMPORT_IMAGE_LABEL, "That file couldn't be read as an image.")
+            QMessageBox.warning(self, IMPORT_IMAGE_LABEL, "That file couldn't be read or isn't a supported format.")
             return
 
         self.refresh()

@@ -5,6 +5,7 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QL
 from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
 from PySide6.QtGui import QDrag
 from src.core import icons, theme
+from src.core.image_loader import IMPORT_FILE_FILTER
 from src.features.editor.layout.layers_panel import LayersPanel
 
 if TYPE_CHECKING:
@@ -103,10 +104,10 @@ class LeftSidebar(QWidget):
 
     def trigger_image_upload(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
-            self, 
-            "Select Local Image Asset", 
-            "", 
-            "Images (*.png *.jpg *.jpeg *.bmp *.gif)"
+            self,
+            "Select Local Image Asset",
+            "",
+            IMPORT_FILE_FILTER,
         )
         if file_path:
             # Spawn the image right in the middle of the current canvas frame
