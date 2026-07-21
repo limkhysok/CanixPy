@@ -22,7 +22,7 @@ The core of **CanixPy** is `desktop_app/`: an ultra-fast, offline-first graphic 
 ```
 CanixPy/
 ├── desktop_app/   # PySide6 desktop editor (the core product)
-├── backend/       # FastAPI web API (placeholder, not yet implemented)
+├── backend/       # FastAPI web API — data models in place, routes not yet implemented
 └── frontend/      # Next.js web frontend (placeholder, not yet implemented)
 ```
 
