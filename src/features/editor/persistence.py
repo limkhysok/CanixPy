@@ -221,7 +221,7 @@ def _deserialize_text(data: dict[str, Any]) -> QGraphicsItem:
     font.setUnderline(data.get("underline", False))
     item.setFont(font)
     item.setDefaultTextColor(QColor(data["color"]))
-    item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditable)
+    item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
     if data.get("text_width", -1) >= 0:
         item.setTextWidth(data["text_width"])
     if "alignment" in data:

@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
-from PySide6.QtGui import QDrag
+from PySide6.QtGui import QDrag, QFont
 from src.core import icons, theme
 from src.core.image_loader import IMPORT_FILE_FILTER
 from src.features.editor.layout.layers_panel import LayersPanel
@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 LEFT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("left_sidebar.qss"))
 
+FONT_ICON = "fa5s.font"
+
 SHAPE_ICONS = {
     "Rectangle": "fa5s.square",
     "Circle": "fa5s.circle",
@@ -33,17 +35,17 @@ SHAPE_ICONS = {
     "Diamond": "fa5s.gem",
     "Star": "fa5s.star",
     "Arrow": "fa5s.long-arrow-alt-right",
-    "Text Box": "fa5s.font",
+    "Text Box": FONT_ICON,
 }
 
 # (label, icon name) for each nav-rail entry, in the order they're shown.
-# "Elements", "Layers", and "Upload" have real panels wired up below; the
-# rest render a "coming soon" placeholder until their features exist.
+# "Elements", "Layers", "Texts", and "Upload" have real panels wired up below;
+# the rest render a "coming soon" placeholder until their features exist.
 NAV_ITEMS: list[tuple[str, str]] = [
     ("Templates", "fa5s.clone"),
     ("Elements", "fa5s.shapes"),
     ("Layers", "fa5s.layer-group"),
-    ("Texts", "fa5s.font"),
+    ("Texts", FONT_ICON),
     ("Brand", "fa5s.paint-brush"),
     ("Upload", "fa5s.upload"),
     ("Tools", "fa5s.tools"),
@@ -51,6 +53,14 @@ NAV_ITEMS: list[tuple[str, str]] = [
     ("Apps", "fa5s.th-large"),
     ("Magic Media", "fa5s.magic"),
     ("Google Drive", "fa5b.google-drive"),
+]
+
+# (button label, inserted text, font size, bold) for each quick-insert
+# preset shown on the Texts panel.
+TEXT_PRESETS: list[tuple[str, str, int, bool]] = [
+    ("Add a heading", "Add a heading", 32, True),
+    ("Add a subheading", "Add a subheading", 22, True),
+    ("Add body text", "Add a little bit of body text", 16, False),
 ]
 
 RAIL_WIDTH = 72
@@ -159,6 +169,7 @@ class LeftSidebar(QWidget):
         page_builders = {
             "Elements": self._build_elements_page,
             "Layers": self._build_layers_page,
+            "Texts": self._build_texts_page,
             "Upload": self._build_upload_page,
         }
 
@@ -207,6 +218,29 @@ class LeftSidebar(QWidget):
         self.layers_panel = LayersPanel(self.main_app)
         layout.addWidget(self.layers_panel, 1)
         return page
+
+    def _build_texts_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+        layout.addWidget(_section_header("Text Styles"))
+        for button_label, text, size, bold in TEXT_PRESETS:
+            btn = QPushButton(icons.icon(FONT_ICON), button_label)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(
+                lambda _checked=False, t=text, s=size, b=bold: self.add_text_preset(t, s, b)
+            )
+            layout.addWidget(btn)
+        layout.addStretch()
+        return page
+
+    def add_text_preset(self, text: str, size: int, bold: bool) -> None:
+        font = QFont("Arial", size)
+        font.setBold(bold)
+        # Same drop point the Upload page centers images on.
+        center_point = QPointF(400, 300)
+        self.main_app.scene.add_text_item(text, center_point, font)
 
     def _build_upload_page(self) -> QWidget:
         page = QWidget()

@@ -70,14 +70,33 @@ class DesignScene(QGraphicsScene):
             item = ResizablePolygonItem(shape_type, 100, 100)
             item.setBrush(QBrush(QColor("#f39c12")))
         elif shape_type == "Text Box":
-            item = RotatableTextItem("Double Click to Edit")
-            item.setFont(QFont("Arial", 16))
-            item.setDefaultTextColor(QColor("#2c3e50"))
-            item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditable)
+            self.add_text_item("Double Click to Edit", pos)
+            return
         else:
             return
 
         item.setPos(pos.x() - 50, pos.y() - 50)
+        item.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        )
+        self._add_item_with_undo(item)
+
+    def add_text_item(
+        self,
+        text: str,
+        pos: QPointF,
+        font: QFont | None = None,
+    ) -> None:
+        item = RotatableTextItem(text)
+        item.setFont(font or QFont("Arial", 16))
+        item.setDefaultTextColor(QColor("#2c3e50"))
+        # Starts non-editable so a single click selects/drags it like any
+        # other item; RotatableTextItem switches into edit mode on double-click.
+        item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+        bounds = item.boundingRect()
+        item.setPos(pos.x() - bounds.width() / 2, pos.y() - bounds.height() / 2)
         item.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
             QGraphicsItem.GraphicsItemFlag.ItemIsSelectable

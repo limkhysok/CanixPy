@@ -84,7 +84,7 @@ class CoreDesignApp(QMainWindow):
 
     def zoom_in(self) -> None: self.view.scale(1.2, 1.2)
     def zoom_out(self) -> None: self.view.scale(0.8, 0.8)
-    def zoom_reset(self) -> None: self.view.resetTransform()
+    def zoom_reset(self) -> None: self.view.fit_to_page()
 
     def _page_label(self, index: int) -> str:
         return self.pages[index].page_name or f"Page {index + 1}"
@@ -110,6 +110,7 @@ class CoreDesignApp(QMainWindow):
         self.current_page_index = index
         self.scene = self.pages[index]
         self.view.setScene(self.scene)
+        self.view.request_fit_to_page()
         if self.page_selector.currentIndex() != index:
             self.page_selector.blockSignals(True)
             self.page_selector.setCurrentIndex(index)
@@ -260,6 +261,7 @@ class CoreDesignApp(QMainWindow):
         self.current_page_index = 0
         self.scene = self.pages[0]
         self.view.setScene(self.scene)
+        self.view.request_fit_to_page()
         self._rebuild_page_selector()
         self.refresh_editor_panels()
 

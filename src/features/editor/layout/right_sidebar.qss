@@ -15,7 +15,52 @@ QLabel#hintText {
     color: $TEXT_SECONDARY;
     font-size: 12px;
 }
-QPushButton#toggleButton:checked {
+
+/* Buttons -- softer rounded corners + sage green hover/press feedback,
+   scoped to this panel so the rest of the app keeps its neutral default. */
+PropertiesPanel QPushButton {
+    border-radius: 8px;
+    border: 1px solid $BORDER;
+    padding: 8px 12px;
+}
+PropertiesPanel QPushButton:hover {
     background-color: $ACCENT_LIGHT;
     border-color: $ACCENT;
+}
+PropertiesPanel QPushButton:pressed {
+    background-color: $ACCENT_LIGHT;
+    border-color: $ACCENT_PRESSED;
+}
+
+/* Compact square icon buttons -- style/alignment rows -- no label, so they
+   just need even padding around the glyph instead of the wide text padding. */
+QPushButton#iconButton, QPushButton#toggleButton {
+    padding: 8px;
+}
+QPushButton#toggleButton:checked {
+    background-color: $ACCENT_LIGHT;
+    border: 1px solid $ACCENT;
+}
+QPushButton#toggleButton:checked:hover {
+    background-color: $ACCENT_LIGHT;
+    border-color: $ACCENT_PRESSED;
+}
+
+/* Inputs -- rounded, sage focus ring on the field the user is editing. */
+PropertiesPanel QFontComboBox, PropertiesPanel QSpinBox {
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+    padding: 6px 8px;
+}
+PropertiesPanel QFontComboBox:hover, PropertiesPanel QSpinBox:hover {
+    border-color: $ACCENT;
+}
+PropertiesPanel QFontComboBox:focus, PropertiesPanel QSpinBox:focus {
+    border: 1px solid $ACCENT;
+    outline: none;
+}
+
+PropertiesPanel QCheckBox {
+    color: $TEXT_PRIMARY;
+    font-size: 13px;
 }

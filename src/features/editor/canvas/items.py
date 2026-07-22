@@ -9,10 +9,10 @@ subclasses, not wrappers.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, cast
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QCursor, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QCursor, QFocusEvent, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
@@ -75,12 +75,27 @@ def _resized_rect(start: QRectF, handle: str, delta: QPointF) -> QRectF:
     return rect.normalized()
 
 
-class _HandleMixin:
+# Real base is `object` (see the class docstring for why) -- this indirection
+# just gives the type checker a QGraphicsItem to resolve `self.<method>` calls
+# against, since TYPE_CHECKING is True for it but False at runtime.
+if TYPE_CHECKING:
+    _HandleMixinBase = QGraphicsItem
+else:
+    _HandleMixinBase = object
+
+
+class _HandleMixin(_HandleMixinBase):
     """Adds resize + rotate handles to a QGraphicsItem when selected.
 
     Subclasses implement `local_rect()` (item-local geometry used to place
     handles) and `_apply_resize(rect)` (mutate the item to match that rect).
     Set `RESIZE_HANDLES = ()` to offer rotate-only interaction (used by text).
+
+    `_HandleMixinBase` is QGraphicsItem only for the type checker (see its
+    definition above) -- actually deriving from it at runtime makes shiboken
+    build two separate QGraphicsItem C++ bases for e.g. `ResizableRectItem
+    (_HandleMixin, QGraphicsRectItem)` and segfaults. At runtime this is
+    exactly the plain, base-less mixin it always was.
     """
 
     RESIZE_HANDLES: tuple[str, ...] = _ALL_HANDLES
@@ -151,7 +166,7 @@ class _HandleMixin:
     def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802
         handle = self._handle_at(event.pos()) if self.isSelected() else None
         self.setCursor(QCursor(_CURSOR_FOR_HANDLE[handle]) if handle else QCursor())
-        super().hoverMoveEvent(event)  # type: ignore[misc]
+        super().hoverMoveEvent(event)
 
     # -- mouse: resize / rotate, falling back to normal move/select -----
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
@@ -162,7 +177,7 @@ class _HandleMixin:
                 center = self.mapToScene(self.local_rect().center())
                 p = event.scenePos()
                 self._rotate_start_angle = math.degrees(math.atan2(p.y() - center.y(), p.x() - center.x()))
-                self._rotate_start_rotation = self.rotation()  # type: ignore[attr-defined]
+                self._rotate_start_rotation = self.rotation()
                 event.accept()
                 return
             if handle:
@@ -172,15 +187,15 @@ class _HandleMixin:
                 self._resize_changed = False
                 event.accept()
                 return
-        super().mousePressEvent(event)  # type: ignore[misc]
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._rotating:
             center = self.mapToScene(self.local_rect().center())
             p = event.scenePos()
             angle = math.degrees(math.atan2(p.y() - center.y(), p.x() - center.x()))
-            self.setTransformOriginPoint(self.local_rect().center())  # type: ignore[attr-defined]
-            self.setRotation(self._rotate_start_rotation + (angle - self._rotate_start_angle))  # type: ignore[attr-defined]
+            self.setTransformOriginPoint(self.local_rect().center())
+            self.setRotation(self._rotate_start_rotation + (angle - self._rotate_start_angle))
             event.accept()
             return
         if self._active_handle and self._resize_start_rect is not None and self._resize_start_pos is not None:
@@ -190,17 +205,17 @@ class _HandleMixin:
             self._resize_changed = True
             event.accept()
             return
-        super().mouseMoveEvent(event)  # type: ignore[misc]
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._rotating:
             self._rotating = False
-            new_rotation = self.rotation()  # type: ignore[attr-defined]
+            new_rotation = self.rotation()
             old_rotation = self._rotate_start_rotation
             if abs(new_rotation - old_rotation) > 0.01:
                 self._push_undo(
-                    lambda: self.setRotation(old_rotation),  # type: ignore[attr-defined]
-                    lambda: self.setRotation(new_rotation),  # type: ignore[attr-defined]
+                    lambda: self.setRotation(old_rotation),
+                    lambda: self.setRotation(new_rotation),
                 )
             event.accept()
             return
@@ -215,12 +230,17 @@ class _HandleMixin:
                 )
             event.accept()
             return
-        super().mouseReleaseEvent(event)  # type: ignore[misc]
+        super().mouseReleaseEvent(event)
 
-    def _push_undo(self, undo_fn: object, redo_fn: object) -> None:
-        scene = self.scene()  # type: ignore[attr-defined]
+    def _push_undo(self, undo_fn: Callable[[], None], redo_fn: Callable[[], None]) -> None:
+        # QGraphicsItem.scene() is typed as always returning a QGraphicsScene,
+        # but at runtime it's None until the item is actually added to one --
+        # cast to the real (possibly-None) DesignScene so callers before that
+        # point don't crash, and so the DesignScene-only `.undo_stack` below
+        # type-checks against the real class instead of the generic base.
+        scene = cast("DesignScene | None", self.scene())
         if scene is not None:
-            scene.undo_stack.push(undo_fn, redo_fn)  # type: ignore[attr-defined]
+            scene.undo_stack.push(undo_fn, redo_fn)
 
 
 class ResizableRectItem(_HandleMixin, QGraphicsRectItem):
@@ -263,7 +283,10 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
         self.setScale(scale)
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
-        super().paint(painter, option, widget)
+        # QGraphicsPixmapItem.paint's stub (unlike QGraphicsItem's) omits the
+        # Optional here even though Qt allows a null widget -- cast rather
+        # than narrow our own signature away from the real base contract.
+        super().paint(painter, option, cast(QWidget, widget))
         self._paint_handles(painter)
 
 
@@ -362,6 +385,25 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
     def _apply_resize(self, rect: QRectF) -> None:
         return  # not supported
 
+    def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        # Items are created with NoTextInteraction so a single click
+        # selects/drags them like any other item; double-click (matching the
+        # "Double Click to Edit" placeholder) is what switches into editing.
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
+        super().mouseDoubleClickEvent(event)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802
+        # Drop back out of edit mode on blur, otherwise every later single
+        # click places a text cursor instead of selecting/moving the item.
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        cursor = self.textCursor()
+        cursor.clearSelection()
+        self.setTextCursor(cursor)
+        super().focusOutEvent(event)
+
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
-        super().paint(painter, option, widget)
+        # See ResizablePixmapItem.paint -- QGraphicsTextItem's stub has the
+        # same Optional-less `widget` mismatch against the real base contract.
+        super().paint(painter, option, cast(QWidget, widget))
         self._paint_handles(painter)

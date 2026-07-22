@@ -2,8 +2,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsView, QGraphicsScene, QWidget
 from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QMouseEvent, QPainter, QWheelEvent, QKeyEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QMouseEvent, QPainter, QResizeEvent, QWheelEvent, QKeyEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent
 from src.core import theme
+from src.features.editor.canvas.items import is_layer_locked
 from src.features.editor.canvas.scene import DesignScene
 
 if TYPE_CHECKING:
@@ -18,11 +19,26 @@ _NUDGE_KEYS = {
     Qt.Key.Key_Down: (0, 1),
 }
 
+# Repeated Alt+clicks within this many viewport pixels of each other are
+# treated as "the same spot" and advance the select-below cycle; anything
+# further away starts a fresh cycle at the topmost item.
+_ALT_CYCLE_TOLERANCE = 4
+
+# Scene-unit padding around the page when fitting it to the viewport, so the
+# page's own edge/border isn't flush against the viewport frame.
+FIT_MARGIN = 40
+
 class ZoomableGraphicsView(QGraphicsView):
     def __init__(self, scene: QGraphicsScene, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
         super().__init__(scene, parent)
         self.main_app = main_app
         self._drag_start_positions: dict[QGraphicsItem, QPointF] = {}
+        self._alt_cycle_pos: QPointF | None = None
+        self._alt_cycle_index: int = 0
+        # The viewport has no real size yet at construction time (layout
+        # hasn't run), so the initial fit-to-page has to wait for the first
+        # resize that actually gives it one.
+        self._pending_fit = True
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
@@ -34,6 +50,32 @@ class ZoomableGraphicsView(QGraphicsView):
         # surround still shows when the window is larger than the page.
         self.setBackgroundBrush(QBrush(QColor(theme.CANVAS_SURROUND)))
 
+    def fit_to_page(self) -> None:
+        """Scale/center the view so the whole page is visible -- called on
+        first show and on every page switch, so opening a task with a canvas
+        bigger than the viewport (e.g. a 1080x1920 Story) doesn't start
+        zoomed in past the page edges, forcing a manual Ctrl+scroll out."""
+        page_frame = getattr(self.scene(), "page_frame", None)
+        if page_frame is None:
+            return
+        rect = page_frame.sceneBoundingRect().adjusted(-FIT_MARGIN, -FIT_MARGIN, FIT_MARGIN, FIT_MARGIN)
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+
+    def request_fit_to_page(self) -> None:
+        """Fit now if the viewport already has real geometry, otherwise defer
+        to the first resizeEvent that gives it one (see `_pending_fit`)."""
+        if self.viewport().width() > 0 and self.viewport().height() > 0:
+            self.fit_to_page()
+            self._pending_fit = False
+        else:
+            self._pending_fit = True
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._pending_fit and self.viewport().width() > 0 and self.viewport().height() > 0:
+            self.fit_to_page()
+            self._pending_fit = False
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
@@ -42,10 +84,46 @@ class ZoomableGraphicsView(QGraphicsView):
             super().wheelEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            self._alt_click_select(event)
+            return
+
+        # Any plain click abandons whatever Alt-cycle was in progress, so a
+        # later Alt+click at that same spot starts over at the topmost item
+        # instead of resuming a stale cycle.
+        self._alt_cycle_pos = None
+
         super().mousePressEvent(event)
         # Snapshot positions *after* the click has updated selection, so a
         # drag starting here can be diffed against these on release.
         self._drag_start_positions = {item: item.pos() for item in self.scene().selectedItems()}
+
+    def _alt_click_select(self, event: QMouseEvent) -> None:
+        """Alt+click cycles through whatever is stacked at this point, one
+        item further down the z-order each repeated click -- the Figma/Canva
+        way to reach something buried under other items without detouring
+        through the Layers panel."""
+        scene = cast(DesignScene, self.scene())
+        page_frame = getattr(scene, "page_frame", None)
+        scene_pos = self.mapToScene(event.position().toPoint())
+        stack = [
+            item for item in scene.items(scene_pos)
+            if item is not page_frame and not is_layer_locked(item)
+        ]
+        stack.sort(key=lambda item: item.zValue(), reverse=True)
+
+        view_pos = event.position()
+        same_spot = (
+            self._alt_cycle_pos is not None
+            and (view_pos - self._alt_cycle_pos).manhattanLength() <= _ALT_CYCLE_TOLERANCE
+        )
+        self._alt_cycle_index = self._alt_cycle_index + 1 if same_spot else 0
+        self._alt_cycle_pos = view_pos
+
+        scene.clearSelection()
+        if stack:
+            stack[self._alt_cycle_index % len(stack)].setSelected(True)
+        self._drag_start_positions = {item: item.pos() for item in scene.selectedItems()}
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         super().mouseReleaseEvent(event)

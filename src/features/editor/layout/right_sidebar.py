@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QLabel, QPushButton, QFontComboBox, QSlider, QSpinBox
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLayout, QCheckBox, QLabel, QPushButton, QFontComboBox, QSlider, QSpinBox
 from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsItem, QGraphicsItemGroup
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 RIGHT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("right_sidebar.qss"))
 
 ICON_PALETTE = "fa5s.palette"
+ICON_ALIGN_LEFT = "fa5s.align-left"
 ICON_ALIGN_CENTER = "fa5s.align-center"
 
 SECTION_ICONS = {
@@ -23,12 +24,31 @@ SECTION_ICONS = {
     "Font Family": "fa5s.font",
     "Font Size": "fa5s.text-height",
     "Style": "fa5s.bold",
+    "Text Alignment": ICON_ALIGN_LEFT,
     "Arrangement": "fa5s.layer-group",
     "Distribute": "fa5s.arrows-alt-h",
     "Effects": "fa5s.magic",
     "Align to Page": ICON_ALIGN_CENTER,
     "Align Selection": ICON_ALIGN_CENTER,
 }
+
+def _clear_qlayout(layout: QLayout) -> None:
+    # takeAt() detaches the item from the layout immediately; deleteLater()
+    # alone would leave stale widgets rendered until the next event-loop turn.
+    # Items added via addLayout() (the button rows below) come back with
+    # item.widget() == None -- their child widgets live on as un-laid-out,
+    # still-visible children of the panel unless we recurse into the nested
+    # layout too, which used to leave old icon buttons floating on screen,
+    # overlapping the freshly rebuilt rows.
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget:
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
+        elif item.layout():
+            _clear_qlayout(item.layout())
 
 def _section_header(text: str) -> QWidget:
     row = QWidget()
@@ -49,8 +69,12 @@ def _section_header(text: str) -> QWidget:
     return row
 
 def _button(icon_name: str, text: str) -> QPushButton:
-    btn = QPushButton(icons.icon(icon_name), text)
+    btn = QPushButton(icons.icon(icon_name, color=theme.TEXT_PRIMARY), text)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    if not text:
+        # No label -- a compact square icon button (style/alignment rows)
+        # rather than the wide, text-padded default.
+        btn.setObjectName("iconButton")
     return btn
 
 def _text_button(text: str) -> QPushButton:
@@ -59,7 +83,7 @@ def _text_button(text: str) -> QPushButton:
     return btn
 
 def _toggle_button(icon_name: str, tooltip: str, checked: bool) -> QPushButton:
-    btn = QPushButton(icons.icon(icon_name), "")
+    btn = QPushButton(icons.icon(icon_name, color=theme.TEXT_PRIMARY), "")
     btn.setObjectName("toggleButton")
     btn.setToolTip(tooltip)
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -110,16 +134,7 @@ class PropertiesPanel(QWidget):
         self.main_layout.addWidget(hint)
 
     def clear_layout(self) -> None:
-        # takeAt() detaches the item from the layout immediately; deleteLater()
-        # alone would leave stale widgets rendered until the next event-loop
-        # turn, which visibly stacked duplicate labels when this ran more than
-        # once synchronously (e.g. during page-combo signal churn).
-        while self.main_layout.count():
-            item = self.main_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.setParent(None)
-                widget.deleteLater()
+        _clear_qlayout(self.main_layout)
 
     def inspect_selection(self, items: list[QGraphicsItem]) -> None:
         self.clear_layout()
@@ -215,9 +230,11 @@ class PropertiesPanel(QWidget):
             style_row.addWidget(btn_underline)
             self.main_layout.addLayout(style_row)
 
+            self.main_layout.addSpacing(8)
+            self.main_layout.addWidget(_section_header("Text Alignment"))
             align_row = QHBoxLayout()
             align_options = (
-                ("fa5s.align-left", "Align Left", Qt.AlignmentFlag.AlignLeft),
+                (ICON_ALIGN_LEFT, "Align Left", Qt.AlignmentFlag.AlignLeft),
                 (ICON_ALIGN_CENTER, "Align Center", Qt.AlignmentFlag.AlignHCenter),
                 ("fa5s.align-right", "Align Right", Qt.AlignmentFlag.AlignRight),
                 ("fa5s.align-justify", "Justify", Qt.AlignmentFlag.AlignJustify),
@@ -330,7 +347,7 @@ class PropertiesPanel(QWidget):
         label = "Align to Page" if single_item else "Align Selection"
         self.main_layout.addWidget(_section_header(label))
 
-        h_icons = {"left": "fa5s.align-left", "h_center": ICON_ALIGN_CENTER, "right": "fa5s.align-right"}
+        h_icons = {"left": ICON_ALIGN_LEFT, "h_center": ICON_ALIGN_CENTER, "right": "fa5s.align-right"}
         h_row = QHBoxLayout()
         for edge, tooltip in (("left", "Align Left"), ("h_center", "Align Center"), ("right", "Align Right")):
             btn = _button(h_icons[edge], "")
