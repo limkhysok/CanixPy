@@ -4,8 +4,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QComboBox, QFrame, QHBoxLayout, QLabel, QMenu, QPushButton, QToolButton, QWidget
+from PySide6.QtGui import QAction, QColor
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGraphicsDropShadowEffect,
+    QHBoxLayout,
+    QMenu,
+    QPushButton,
+    QToolButton,
+    QWidget,
+)
 
 from src.core import icons, theme
 
@@ -14,7 +22,7 @@ if TYPE_CHECKING:
 
 TOP_NAVBAR_STYLE = theme.load_qss(Path(__file__).with_name("top_navbar.qss"))
 
-ICON_BUTTON_SIZE = QSize(32, 32)
+ICON_BUTTON_SIZE = QSize(38, 38)
 
 
 class TopNavbar(QWidget):
@@ -29,25 +37,14 @@ class TopNavbar(QWidget):
         self.setStyleSheet(TOP_NAVBAR_STYLE)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(14)
 
-        btn_back = QPushButton(icons.icon("fa5s.arrow-left", color=theme.TEXT_PRIMARY), "Back")
+        btn_back = QPushButton(icons.icon("fa5s.arrow-left", color=theme.TEXT_ON_ACCENT), "Back")
         btn_back.setObjectName("backButton")
         btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_back.clicked.connect(self.back_clicked.emit)
         layout.addWidget(btn_back)
-
-        layout.addWidget(self._divider())
-
-        btn_save = self._icon_button("fa5s.save", "Save Project (Ctrl+S)")
-        btn_open = self._icon_button("fa5s.folder-open", "Open Project (Ctrl+O)")
-        btn_save.clicked.connect(main_app.save_project)
-        btn_open.clicked.connect(main_app.open_project)
-        layout.addWidget(btn_save)
-        layout.addWidget(btn_open)
-
-        layout.addWidget(self._divider())
 
         self.btn_undo = self._icon_button("fa5s.undo", "Undo (Ctrl+Z)")
         self.btn_redo = self._icon_button("fa5s.redo", "Redo (Ctrl+Y)")
@@ -55,26 +52,30 @@ class TopNavbar(QWidget):
         self.btn_redo.clicked.connect(main_app.redo)
         self.btn_undo.setEnabled(False)
         self.btn_redo.setEnabled(False)
-        layout.addWidget(self.btn_undo)
-        layout.addWidget(self.btn_redo)
+        undo_redo_layout = QHBoxLayout()
+        undo_redo_layout.setSpacing(6)
+        undo_redo_layout.addWidget(self.btn_undo)
+        undo_redo_layout.addWidget(self.btn_redo)
+        layout.addLayout(undo_redo_layout)
 
-        layout.addWidget(self._divider())
-
-        self.page_selector = QComboBox()
+        # Kept off the visible toolbar for now, but page-switching logic
+        # (rebuild/rename/duplicate/delete/move) still targets this combo,
+        # so it stays alive as a hidden child instead of being deleted.
+        self.page_selector = QComboBox(self)
         self.page_selector.setEditable(True)
         self.page_selector.setMinimumWidth(130)
         self.page_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.page_selector.setCursor(Qt.CursorShape.PointingHandCursor)
         self.page_selector.currentIndexChanged.connect(main_app.on_page_combo_changed)
-        self.page_selector.lineEdit().setToolTip("Type to rename this page")
-        self.page_selector.lineEdit().editingFinished.connect(
+        page_selector_line_edit = self.page_selector.lineEdit()
+        assert page_selector_line_edit is not None  # guaranteed by setEditable(True) above
+        page_selector_line_edit.setToolTip("Type to rename this page")
+        page_selector_line_edit.editingFinished.connect(
             lambda: main_app.rename_current_page(self.page_selector.currentText())
         )
+        self.page_selector.setVisible(False)
 
-        # Split button: clicking the main face adds a page; the arrow opens
-        # the less-common page operations, keeping the toolbar from needing
-        # one button per action.
-        btn_page_menu = QToolButton()
+        btn_page_menu = QToolButton(self)
         btn_page_menu.setObjectName("pageMenuButton")
         btn_page_menu.setText("Add Page")
         btn_page_menu.setIcon(icons.icon("fa5s.plus"))
@@ -98,24 +99,7 @@ class TopNavbar(QWidget):
         page_menu.addAction(move_left_action)
         page_menu.addAction(move_right_action)
         btn_page_menu.setMenu(page_menu)
-
-        pages_label = QLabel("Pages:")
-        pages_label.setObjectName("navLabel")
-        layout.addWidget(pages_label)
-        layout.addWidget(self.page_selector)
-        layout.addWidget(btn_page_menu)
-
-        layout.addWidget(self._divider())
-
-        btn_zoom_out = self._icon_button("fa5s.search-minus", "Zoom Out")
-        btn_zoom_in = self._icon_button("fa5s.search-plus", "Zoom In")
-        btn_zoom_reset = self._icon_button("fa5s.compress-arrows-alt", "Reset Zoom")
-        btn_zoom_out.clicked.connect(main_app.zoom_out)
-        btn_zoom_in.clicked.connect(main_app.zoom_in)
-        btn_zoom_reset.clicked.connect(main_app.zoom_reset)
-        layout.addWidget(btn_zoom_out)
-        layout.addWidget(btn_zoom_in)
-        layout.addWidget(btn_zoom_reset)
+        btn_page_menu.setVisible(False)
 
         layout.addStretch()
 
@@ -140,22 +124,22 @@ class TopNavbar(QWidget):
             export_menu.addAction(action)
         btn_export.setMenu(export_menu)
 
+        export_shadow = QGraphicsDropShadowEffect(btn_export)
+        export_shadow.setBlurRadius(16)
+        export_shadow.setOffset(0, 3)
+        export_shadow.setColor(QColor(0, 0, 0, 70))
+        btn_export.setGraphicsEffect(export_shadow)
+
         layout.addWidget(btn_export)
 
     def _icon_button(self, icon_name: str, tooltip: str) -> QPushButton:
-        btn = QPushButton(icons.icon(icon_name), "")
+        btn = QPushButton(icons.icon(icon_name, color=theme.TEXT_ON_ACCENT), "")
         btn.setObjectName("iconButton")
         btn.setToolTip(tooltip)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setFixedSize(ICON_BUTTON_SIZE)
+        btn.setIconSize(QSize(20, 20))
         return btn
-
-    def _divider(self) -> QFrame:
-        line = QFrame()
-        line.setFrameShape(QFrame.Shape.VLine)
-        line.setFrameShadow(QFrame.Shadow.Plain)
-        line.setStyleSheet(f"color: {theme.BORDER};")
-        return line
 
     def set_history_enabled(self, can_undo: bool, can_redo: bool) -> None:
         self.btn_undo.setEnabled(can_undo)
