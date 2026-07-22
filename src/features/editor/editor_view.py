@@ -199,6 +199,12 @@ class CoreDesignApp(QMainWindow):
     def duplicate_selection(self) -> None:
         page_frame = getattr(self.scene, "page_frame", None)
         items = [i for i in self.scene.selectedItems() if i != page_frame]
+        self.duplicate_items(items)
+
+    def duplicate_items(self, items: list[QGraphicsItem]) -> None:
+        """Duplicate specific items regardless of current selection -- e.g.
+        an image's right-click "Duplicate" should act on that image even if
+        it's locked (and so can't actually be selected)."""
         data = [d for i in items if (d := persistence.serialize_item(i)) is not None]
         self._paste_data(data)
 

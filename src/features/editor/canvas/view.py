@@ -1,10 +1,25 @@
 from __future__ import annotations
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
-from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsView, QGraphicsScene, QWidget
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QMouseEvent, QPainter, QResizeEvent, QWheelEvent, QKeyEvent, QDragEnterEvent, QDragMoveEvent, QDropEvent
-from src.core import theme
-from src.features.editor.canvas.items import is_layer_locked
+from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsView, QGraphicsScene, QMenu, QMessageBox, QWidget
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import (
+    QAction,
+    QBrush,
+    QColor,
+    QContextMenuEvent,
+    QKeySequence,
+    QMouseEvent,
+    QPainter,
+    QResizeEvent,
+    QWheelEvent,
+    QKeyEvent,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
+)
+from src.core import icons, theme
+from src.features.editor.canvas.items import ResizablePixmapItem, get_image_source, is_layer_locked, set_layer_locked
 from src.features.editor.canvas.scene import DesignScene
 
 if TYPE_CHECKING:
@@ -95,8 +110,18 @@ class ZoomableGraphicsView(QGraphicsView):
 
         super().mousePressEvent(event)
         # Snapshot positions *after* the click has updated selection, so a
-        # drag starting here can be diffed against these on release.
-        self._drag_start_positions = {item: item.pos() for item in self.scene().selectedItems()}
+        # drag starting here can be diffed against these on release. Items
+        # mid-handle-resize/-rotate are excluded: those push their own
+        # undo entry (see _HandleMixin), and some resizes (e.g. an image's,
+        # to keep the dragged-from corner fixed) legitimately move the item
+        # too -- without this exclusion that also looked like a plain drag
+        # here, pushing a second, conflicting move-undo on top of the
+        # resize's own and corrupting the undo stack.
+        self._drag_start_positions = {
+            item: item.pos()
+            for item in self.scene().selectedItems()
+            if not (getattr(item, "_active_handle", None) or getattr(item, "_rotating", False))
+        }
 
     def _alt_click_select(self, event: QMouseEvent) -> None:
         """Alt+click cycles through whatever is stacked at this point, one
@@ -124,6 +149,80 @@ class ZoomableGraphicsView(QGraphicsView):
         if stack:
             stack[self._alt_cycle_index % len(stack)].setSelected(True)
         self._drag_start_positions = {item: item.pos() for item in scene.selectedItems()}
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        scene = cast(DesignScene, self.scene())
+        page_frame = getattr(scene, "page_frame", None)
+        scene_pos = self.mapToScene(event.pos())
+        images = [
+            item for item in scene.items(scene_pos)
+            if item is not page_frame and isinstance(item, ResizablePixmapItem)
+        ]
+        if not images:
+            super().contextMenuEvent(event)
+            return
+        images.sort(key=lambda item: item.zValue(), reverse=True)
+        image = images[0]
+
+        # setSelected() is a no-op on a locked (unselectable) item, so the
+        # menu actions below target `image` directly rather than "whatever's
+        # selected" -- Duplicate/Delete/Info all work the same regardless.
+        if not is_layer_locked(image):
+            scene.clearSelection()
+            image.setSelected(True)
+            self.main_app.sync_editor_selection()
+
+        self._show_image_context_menu(image, event.globalPos())
+
+    def _show_image_context_menu(self, image: ResizablePixmapItem, global_pos: QPoint) -> None:
+        scene = cast(DesignScene, self.scene())
+        menu = QMenu(self)
+
+        duplicate_action = QAction(icons.icon("fa5s.clone", color=theme.TEXT_PRIMARY), "Duplicate", menu)
+        duplicate_action.triggered.connect(lambda: self.main_app.duplicate_items([image]))
+        menu.addAction(duplicate_action)
+
+        locked = is_layer_locked(image)
+        lock_action = QAction(
+            icons.icon("fa5s.unlock" if locked else "fa5s.lock", color=theme.TEXT_PRIMARY),
+            "Unlock" if locked else "Lock",
+            menu,
+        )
+        lock_action.triggered.connect(lambda: self._toggle_image_lock(image))
+        menu.addAction(lock_action)
+
+        menu.addSeparator()
+
+        delete_action = QAction(icons.icon("fa5s.trash-alt", color=theme.TEXT_PRIMARY), "Delete", menu)
+        delete_action.triggered.connect(lambda: scene.delete_items([image]))
+        menu.addAction(delete_action)
+
+        menu.addSeparator()
+
+        info_action = QAction(icons.icon("fa5s.info-circle", color=theme.TEXT_PRIMARY), "Info", menu)
+        info_action.triggered.connect(lambda: self._show_image_info(image))
+        menu.addAction(info_action)
+
+        menu.exec(global_pos)
+
+    def _toggle_image_lock(self, image: ResizablePixmapItem) -> None:
+        set_layer_locked(image, not is_layer_locked(image))
+        self.main_app.refresh_editor_panels()
+
+    def _show_image_info(self, image: ResizablePixmapItem) -> None:
+        native = image.pixmap().size()
+        scale = image.scale()
+        displayed_w = round(native.width() * scale)
+        displayed_h = round(native.height() * scale)
+        lines = [
+            f"Original size: {native.width()} x {native.height()} px",
+            f"Displayed size: {displayed_w} x {displayed_h} px ({scale * 100:.0f}%)",
+        ]
+        source = get_image_source(image)
+        title = Path(source).name if source else "Image"
+        if source:
+            lines.append(f"Source: {source}")
+        QMessageBox.information(self, title, "\n".join(lines))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         super().mouseReleaseEvent(event)

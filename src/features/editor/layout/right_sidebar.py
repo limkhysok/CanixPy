@@ -17,6 +17,13 @@ ICON_PALETTE = "fa5s.palette"
 ICON_ALIGN_LEFT = "fa5s.align-left"
 ICON_ALIGN_CENTER = "fa5s.align-center"
 
+# Fixed, not left to the layout's stretch factor -- different item types
+# (image vs. text vs. shape) populate main_layout with different content, and
+# a stretch-driven width follows whatever that content's minimum size needs
+# on each rebuild, visibly resizing the whole column every time the
+# selection changes.
+PANEL_WIDTH = 300
+
 SECTION_ICONS = {
     "Group": "fa5s.object-group",
     "Shape Styling": ICON_PALETTE,
@@ -97,6 +104,7 @@ class PropertiesPanel(QWidget):
         self.main_app = main_app
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(RIGHT_SIDEBAR_STYLE)
+        self.setFixedWidth(PANEL_WIDTH)
         self.viewmodel = PropertiesPanelViewModel()
 
         # Outer layout spans the whole widget (so the border-left runs the full

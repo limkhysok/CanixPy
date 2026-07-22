@@ -12,7 +12,7 @@ import math
 from typing import TYPE_CHECKING, Callable, cast
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QCursor, QFocusEvent, QPainter, QPen, QPolygonF
+from PySide6.QtGui import QColor, QCursor, QFocusEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
@@ -32,9 +32,25 @@ from src.core import theme
 if TYPE_CHECKING:
     from src.features.editor.canvas.scene import DesignScene
 
-HANDLE_SIZE = 8.0
-ROTATE_HANDLE_OFFSET = 24.0
+# Handle/rotate sizes below are target *screen* pixels, not local/scene units --
+# see _HandleMixin._device_scale(). A constant in local units would shrink to a
+# couple of real screen pixels for anything zoomed out or scaled down (e.g. an
+# imported photo, which lands at full native pixel size and forces the view to
+# zoom way out), making handles nearly impossible to grab with the mouse.
+HANDLE_VISUAL_PX = 8.0
+HANDLE_HIT_PX = 18.0  # bigger than the visible square -- forgiving without looking bulky
+ROTATE_OFFSET_PX = 24.0
+ROTATE_HIT_PX = 18.0
 MIN_SIZE = 12.0
+
+# Fixed (not zoom-dependent) upper bound on how large the on-screen-constant
+# sizes above are allowed to grow in local units when heavily zoomed out.
+# boundingRect() needs a value Qt can index/cache without per-zoom
+# invalidation, so it reserves this fixed worst-case margin; shape() (see
+# below) is what actually governs precise click/hit behavior, so a generous
+# bound here doesn't make empty canvas space near a small item clickable.
+_MAX_LOCAL_HANDLE_HIT = 80.0
+_MAX_LOCAL_ROTATE_REACH = 220.0
 
 SHADOW_BLUR = 16
 SHADOW_OFFSET = (0, 4)
@@ -106,6 +122,7 @@ class _HandleMixin(_HandleMixinBase):
         self._active_handle: str | None = None
         self._resize_start_rect: QRectF | None = None
         self._resize_start_pos: QPointF | None = None
+        self._resize_start_scene_pos: QPointF | None = None
         self._resize_changed = False
         self._rotating = False
         self._rotate_start_angle = 0.0
@@ -118,9 +135,93 @@ class _HandleMixin(_HandleMixinBase):
     def _apply_resize(self, rect: QRectF) -> None:
         raise NotImplementedError
 
+    def _resize_reference_rect(self) -> QRectF:
+        """Rect a resize drag starts from/ends at, in whatever coordinate
+        space _apply_resize()/_resize_delta() use for this subclass. Default:
+        local_rect(), matching shape items -- setRect() mutates their local
+        geometry, not their transform, so local coordinates stay stable for
+        the whole drag and are also self-contained (safe to replay later for
+        undo/redo without any other saved state)."""
+        return QRectF(self.local_rect())
+
+    def _resize_delta(self, event: QGraphicsSceneMouseEvent) -> QPointF:
+        """Mouse movement since the drag started, in the same coordinate
+        space as _resize_reference_rect(). Default: Qt's item-local mapping.
+        Override together with _resize_reference_rect() for any subclass
+        whose _apply_resize() changes the item's own transform (e.g.
+        ResizablePixmapItem's setScale()) -- local coordinates would
+        otherwise be measured against a transform that's drifting on every
+        move, corrupting the delta mid-drag."""
+        assert self._resize_start_pos is not None
+        return event.pos() - self._resize_start_pos
+
+    def _resize_target_rect(self, rect: QRectF) -> QRectF:
+        """Post-process the raw handle-driven rect before it's applied.
+        Default: identity. Override for any subclass whose resize has fewer
+        true degrees of freedom than the raw two-axis drag rect implies --
+        see ResizablePixmapItem, where passing the raw rect straight through
+        let the anchor corner drift whenever the mouse drag didn't happen to
+        exactly match the locked aspect ratio."""
+        return rect
+
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
-        pad = HANDLE_SIZE + ROTATE_HANDLE_OFFSET
+        # Fixed worst-case margin -- see _MAX_LOCAL_HANDLE_HIT/_MAX_LOCAL_ROTATE_REACH.
+        pad = _MAX_LOCAL_HANDLE_HIT + _MAX_LOCAL_ROTATE_REACH
         return self.local_rect().adjusted(-pad, -pad, pad, pad)
+
+    def shape(self) -> QPainterPath:  # noqa: N802 (Qt override)
+        # Qt's default shape() is just boundingRect() as a rectangle -- with a
+        # fixed generous pad in boundingRect() that would make empty canvas
+        # space near any item clickable. Return the real silhouette instead,
+        # plus a precise hit-region around each handle when selected.
+        path = QPainterPath()
+        # Winding (not the QPainterPath default of odd-even), so overlapping
+        # handle squares -- which do overlap each other and the base rect
+        # once zoomed out enough -- union together instead of the overlap
+        # cancelling out into a "hole" under odd-even parity.
+        path.setFillRule(Qt.FillRule.WindingFill)
+        path.addRect(self.local_rect())
+        if self.isSelected():
+            hit = self._handle_hit_size()
+            for pos in self._handle_positions().values():
+                path.addRect(QRectF(pos.x() - hit / 2, pos.y() - hit / 2, hit, hit))
+            rp = self._rotate_handle_pos()
+            rot_hit = self._rotate_hit_size()
+            path.addEllipse(rp, rot_hit / 2, rot_hit / 2)
+        return path
+
+    # -- device-scale-independent sizing -----------------------------------
+    def _device_scale(self) -> float:
+        """Uniform local-to-screen scale factor (item transform x view zoom).
+        Handle sizes are derived from this so they stay a constant, easily
+        clickable size on screen no matter how zoomed out the view is or how
+        small the item itself has been scaled -- see the HANDLE_*_PX comment
+        above `_HandleMixin` for why that matters."""
+        # See _push_undo below -- scene() is typed as always non-None but is
+        # actually None until the item is added to a scene.
+        scene = cast("DesignScene | None", self.scene())
+        if scene is None:
+            return 1.0
+        views = scene.views()
+        if not views:
+            return 1.0
+        device_transform = self.deviceTransform(views[0].viewportTransform())
+        p0 = device_transform.map(QPointF(0.0, 0.0))
+        p1 = device_transform.map(QPointF(1.0, 0.0))
+        length = math.hypot(p1.x() - p0.x(), p1.y() - p0.y())
+        return length if length > 1e-6 else 1.0
+
+    def _handle_visual_size(self) -> float:
+        return min(HANDLE_VISUAL_PX / self._device_scale(), _MAX_LOCAL_HANDLE_HIT)
+
+    def _handle_hit_size(self) -> float:
+        return min(HANDLE_HIT_PX / self._device_scale(), _MAX_LOCAL_HANDLE_HIT)
+
+    def _rotate_offset(self) -> float:
+        return min(ROTATE_OFFSET_PX / self._device_scale(), _MAX_LOCAL_ROTATE_REACH)
+
+    def _rotate_hit_size(self) -> float:
+        return min(ROTATE_HIT_PX / self._device_scale(), _MAX_LOCAL_ROTATE_REACH)
 
     def _handle_positions(self) -> dict[str, QPointF]:
         r = self.local_rect()
@@ -133,15 +234,15 @@ class _HandleMixin(_HandleMixinBase):
 
     def _rotate_handle_pos(self) -> QPointF:
         r = self.local_rect()
-        return QPointF(r.center().x(), r.top() - ROTATE_HANDLE_OFFSET)
+        return QPointF(r.center().x(), r.top() - self._rotate_offset())
 
     def _handle_at(self, local_pos: QPointF) -> str | None:
-        half = HANDLE_SIZE
+        half = self._handle_hit_size() / 2
         for name, pos in self._handle_positions().items():
             if abs(local_pos.x() - pos.x()) <= half and abs(local_pos.y() - pos.y()) <= half:
                 return name
         rp = self._rotate_handle_pos()
-        if (local_pos - rp).manhattanLength() <= half + 4:
+        if (local_pos - rp).manhattanLength() <= self._rotate_hit_size():
             return "rotate"
         return None
 
@@ -157,10 +258,11 @@ class _HandleMixin(_HandleMixinBase):
         r = self.local_rect()
         rp = self._rotate_handle_pos()
         painter.drawLine(QPointF(r.center().x(), r.top()), rp)
-        painter.drawEllipse(rp, HANDLE_SIZE / 2, HANDLE_SIZE / 2)
+        handle_size = self._handle_visual_size()
+        painter.drawEllipse(rp, handle_size / 2, handle_size / 2)
 
         for pos in self._handle_positions().values():
-            painter.drawRect(QRectF(pos.x() - HANDLE_SIZE / 2, pos.y() - HANDLE_SIZE / 2, HANDLE_SIZE, HANDLE_SIZE))
+            painter.drawRect(QRectF(pos.x() - handle_size / 2, pos.y() - handle_size / 2, handle_size, handle_size))
 
     # -- hover / cursor -----------------------------------------------------
     def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802
@@ -182,8 +284,9 @@ class _HandleMixin(_HandleMixinBase):
                 return
             if handle:
                 self._active_handle = handle
-                self._resize_start_rect = QRectF(self.local_rect())
+                self._resize_start_rect = self._resize_reference_rect()
                 self._resize_start_pos = event.pos()
+                self._resize_start_scene_pos = event.scenePos()
                 self._resize_changed = False
                 event.accept()
                 return
@@ -198,9 +301,10 @@ class _HandleMixin(_HandleMixinBase):
             self.setRotation(self._rotate_start_rotation + (angle - self._rotate_start_angle))
             event.accept()
             return
-        if self._active_handle and self._resize_start_rect is not None and self._resize_start_pos is not None:
-            delta = event.pos() - self._resize_start_pos
+        if self._active_handle and self._resize_start_rect is not None:
+            delta = self._resize_delta(event)
             new_rect = _resized_rect(self._resize_start_rect, self._active_handle, delta)
+            new_rect = self._resize_target_rect(new_rect)
             self._apply_resize(new_rect)
             self._resize_changed = True
             event.accept()
@@ -223,7 +327,7 @@ class _HandleMixin(_HandleMixinBase):
             self._active_handle = None
             if self._resize_changed and self._resize_start_rect is not None:
                 old_rect = QRectF(self._resize_start_rect)
-                new_rect = QRectF(self.local_rect())
+                new_rect = self._resize_reference_rect()
                 self._push_undo(
                     lambda: self._apply_resize(old_rect),
                     lambda: self._apply_resize(new_rect),
@@ -268,19 +372,61 @@ class ResizableEllipseItem(_HandleMixin, QGraphicsEllipseItem):
 
 
 class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
-    """Images resize uniformly (aspect-locked) from the corners only."""
+    """Images resize uniformly (aspect-locked) from the corners only.
+
+    Unlike the shape items above, _apply_resize() here changes the item's own
+    transform (setScale()) rather than a local geometry rect -- local_rect()
+    is always just the native pixmap size and can't itself be resized. That
+    breaks the mixin's default local-coordinate resize contract two ways: (1)
+    event.pos() drifts mid-drag because it's computed against a transform
+    that _apply_resize() is changing on every move, and (2) setScale() alone
+    always anchors growth at the local origin (top-left) no matter which
+    handle was actually dragged, so resizing from any corner but
+    bottom-right visibly grew the image in the wrong direction. Overriding
+    the resize hooks to work in scene coordinates instead fixes both: scene
+    coordinates aren't affected by this item's own live transform, and a
+    scene rect's topLeft doubles as the exact position the anchor corner
+    needs to end up at.
+    """
 
     RESIZE_HANDLES = _CORNER_HANDLES
 
     def local_rect(self) -> QRectF:
         return QRectF(self.pixmap().rect())
 
+    def _resize_reference_rect(self) -> QRectF:
+        return self.mapRectToScene(self.local_rect())
+
+    def _resize_delta(self, event: QGraphicsSceneMouseEvent) -> QPointF:
+        assert self._resize_start_scene_pos is not None
+        return event.scenePos() - self._resize_start_scene_pos
+
+    def _resize_target_rect(self, rect: QRectF) -> QRectF:
+        # Aspect-locked resize has exactly one true degree of freedom, always
+        # driven by width (see _apply_resize) -- the height and whichever of
+        # top/bottom isn't the dragged edge must be re-derived from that
+        # locked aspect ratio rather than trusting the raw (possibly
+        # off-ratio) drag rect, or the anchor edge silently drifts.
+        native = self.local_rect()
+        if native.width() <= 0 or native.height() <= 0:
+            return rect
+        handle = self._active_handle or ""
+        width = rect.width()
+        height = width * (native.height() / native.width())
+        top = rect.bottom() - height if "t" in handle else rect.top()
+        return QRectF(rect.left(), top, width, height)
+
     def _apply_resize(self, rect: QRectF) -> None:
+        # `rect` is a scene rect (see _resize_reference_rect/_resize_delta
+        # above), so it's self-contained -- topLeft is exactly where the
+        # anchor corner needs to be, independent of any transient drag
+        # state, which keeps this safe to replay later for undo/redo.
         native = self.local_rect()
         if native.width() <= 0:
             return
         scale = max(rect.width() / native.width(), 0.05)
         self.setScale(scale)
+        self.setPos(rect.topLeft())
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
         # QGraphicsPixmapItem.paint's stub (unlike QGraphicsItem's) omits the
@@ -347,6 +493,17 @@ def get_layer_name(item: QGraphicsItem) -> str | None:
 
 def set_layer_name(item: QGraphicsItem, name: str | None) -> None:
     item.layer_name = name  # type: ignore[attr-defined]
+
+
+def get_image_source(item: QGraphicsItem) -> str | None:
+    """Original file path an image was imported from, if any -- not set for
+    images created by duplicate/paste/project-load, which only carry the
+    flattened pixmap. Used to show a filename in the image's Info panel."""
+    return getattr(item, "image_source", None)
+
+
+def set_image_source(item: QGraphicsItem, path: str | None) -> None:
+    item.image_source = path  # type: ignore[attr-defined]
 
 
 def is_layer_locked(item: QGraphicsItem) -> bool:

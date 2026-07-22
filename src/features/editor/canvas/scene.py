@@ -17,6 +17,7 @@ from src.features.editor.canvas.items import (
     ResizablePolygonItem,
     ResizableRectItem,
     RotatableTextItem,
+    set_image_source,
 )
 from src.features.editor.canvas.undo_manager import UndoStack
 
@@ -95,7 +96,11 @@ class DesignScene(QGraphicsScene):
         # other item; RotatableTextItem switches into edit mode on double-click.
         item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
 
-        bounds = item.boundingRect()
+        # local_rect(), not boundingRect() -- boundingRect() is padded out to
+        # reserve room for the resize/rotate handles (see items.py), which
+        # would otherwise pull the actually-visible text well off the
+        # intended drop point.
+        bounds = item.local_rect()
         item.setPos(pos.x() - bounds.width() / 2, pos.y() - bounds.height() / 2)
         item.setFlags(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
@@ -271,12 +276,16 @@ class DesignScene(QGraphicsScene):
 
         # Create a native image graphics item
         item = ResizablePixmapItem(pixmap)
+        set_image_source(item, file_path)
 
         # Enable smooth transformation so images don't look pixelated when scaled or zoomed
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
 
-        # Center the image relative to where it was loaded/dropped
-        bounds = item.boundingRect()
+        # Center the image relative to where it was loaded/dropped. local_rect(),
+        # not boundingRect() -- boundingRect() is padded out to reserve room for
+        # the resize/rotate handles (see items.py), which would otherwise pull
+        # the actually-visible image well off the intended drop point.
+        bounds = item.local_rect()
         item.setPos(pos.x() - bounds.width() / 2, pos.y() - bounds.height() / 2)
 
         # Make it selectable and moveable
