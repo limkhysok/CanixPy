@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
-    QComboBox,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
     QMenu,
@@ -26,7 +25,9 @@ ICON_BUTTON_SIZE = QSize(38, 38)
 
 
 class TopNavbar(QWidget):
-    """Header strip above the canvas: back navigation, page switching, zoom, and export."""
+    """Header strip above the canvas: back navigation, undo/redo, and export.
+    Per-page controls (name/rename/duplicate/delete/move, Add Page) float
+    directly over the canvas instead -- see layout/page_overlay.py."""
 
     back_clicked = Signal()
 
@@ -57,50 +58,6 @@ class TopNavbar(QWidget):
         undo_redo_layout.addWidget(self.btn_undo)
         undo_redo_layout.addWidget(self.btn_redo)
         layout.addLayout(undo_redo_layout)
-
-        # Kept off the visible toolbar for now, but page-switching logic
-        # (rebuild/rename/duplicate/delete/move) still targets this combo,
-        # so it stays alive as a hidden child instead of being deleted.
-        self.page_selector = QComboBox(self)
-        self.page_selector.setEditable(True)
-        self.page_selector.setMinimumWidth(130)
-        self.page_selector.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.page_selector.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.page_selector.currentIndexChanged.connect(main_app.on_page_combo_changed)
-        page_selector_line_edit = self.page_selector.lineEdit()
-        assert page_selector_line_edit is not None  # guaranteed by setEditable(True) above
-        page_selector_line_edit.setToolTip("Type to rename this page")
-        page_selector_line_edit.editingFinished.connect(
-            lambda: main_app.rename_current_page(self.page_selector.currentText())
-        )
-        self.page_selector.setVisible(False)
-
-        btn_page_menu = QToolButton(self)
-        btn_page_menu.setObjectName("pageMenuButton")
-        btn_page_menu.setText("Add Page")
-        btn_page_menu.setIcon(icons.icon("fa5s.plus"))
-        btn_page_menu.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        btn_page_menu.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_page_menu.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        btn_page_menu.clicked.connect(main_app.add_new_page)
-
-        page_menu = QMenu(btn_page_menu)
-        duplicate_action = QAction(icons.icon("fa5s.clone"), "Duplicate Page", page_menu)
-        duplicate_action.triggered.connect(main_app.duplicate_current_page)
-        delete_action = QAction(icons.icon("fa5s.trash-alt"), "Delete Page", page_menu)
-        delete_action.triggered.connect(main_app.delete_current_page)
-        move_left_action = QAction(icons.icon("fa5s.arrow-left"), "Move Left", page_menu)
-        move_left_action.triggered.connect(lambda: main_app.move_current_page(-1))
-        move_right_action = QAction(icons.icon("fa5s.arrow-right"), "Move Right", page_menu)
-        move_right_action.triggered.connect(lambda: main_app.move_current_page(1))
-        page_menu.addAction(duplicate_action)
-        page_menu.addAction(delete_action)
-        page_menu.addSeparator()
-        page_menu.addAction(move_left_action)
-        page_menu.addAction(move_right_action)
-        btn_page_menu.setMenu(page_menu)
-        btn_page_menu.setVisible(False)
-
         layout.addStretch()
 
         btn_export = QToolButton()

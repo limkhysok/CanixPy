@@ -11,6 +11,7 @@ from PySide6.QtGui import (
     QKeySequence,
     QMouseEvent,
     QPainter,
+    QPaintEvent,
     QResizeEvent,
     QWheelEvent,
     QKeyEvent,
@@ -20,14 +21,16 @@ from PySide6.QtGui import (
 )
 from src.core import icons, theme
 from src.features.editor.canvas.items import ResizablePixmapItem, get_image_source, is_layer_locked, set_layer_locked
+from src.features.editor.canvas.page import Page
 from src.features.editor.canvas.scene import DesignScene
 
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
+    from src.features.editor.layout.page_overlay import PageOverlayManager
 
 NUDGE_STEP = 1
 NUDGE_STEP_LARGE = 10
-_NUDGE_KEYS = {
+_NUDGE_KEYS: dict[int, tuple[int, int]] = {
     Qt.Key.Key_Left: (-1, 0),
     Qt.Key.Key_Right: (1, 0),
     Qt.Key.Key_Up: (0, -1),
@@ -39,7 +42,7 @@ _NUDGE_KEYS = {
 # further away starts a fresh cycle at the topmost item.
 _ALT_CYCLE_TOLERANCE = 4
 
-# Scene-unit padding around the page when fitting it to the viewport, so the
+# Scene-unit padding around a page when fitting it to the viewport, so the
 # page's own edge/border isn't flush against the viewport frame.
 FIT_MARGIN = 40
 
@@ -50,10 +53,15 @@ class ZoomableGraphicsView(QGraphicsView):
         self._drag_start_positions: dict[QGraphicsItem, QPointF] = {}
         self._alt_cycle_pos: QPointF | None = None
         self._alt_cycle_index: int = 0
+        self._pressed_on_page: Page | None = None
+        # Set by CoreDesignApp -- positions/rebuilds the per-page floating
+        # labels every repaint. Not owned/constructed here so this view stays
+        # decoupled from what the overlay UI actually is.
+        self.page_overlay_manager: "PageOverlayManager | None" = None
         # The viewport has no real size yet at construction time (layout
         # hasn't run), so the initial fit-to-page has to wait for the first
         # resize that actually gives it one.
-        self._pending_fit = True
+        self._pending_fit_page: Page | None = None
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
@@ -65,31 +73,34 @@ class ZoomableGraphicsView(QGraphicsView):
         # surround still shows when the window is larger than the page.
         self.setBackgroundBrush(QBrush(QColor(theme.CANVAS_SURROUND)))
 
-    def fit_to_page(self) -> None:
+    def fit_to_page(self, page: Page) -> None:
         """Scale/center the view so the whole page is visible -- called on
-        first show and on every page switch, so opening a task with a canvas
-        bigger than the viewport (e.g. a 1080x1920 Story) doesn't start
-        zoomed in past the page edges, forcing a manual Ctrl+scroll out."""
-        page_frame = getattr(self.scene(), "page_frame", None)
-        if page_frame is None:
-            return
-        rect = page_frame.sceneBoundingRect().adjusted(-FIT_MARGIN, -FIT_MARGIN, FIT_MARGIN, FIT_MARGIN)
+        first show, so opening a task with a canvas bigger than the viewport
+        (e.g. a 1080x1920 Story) doesn't start zoomed in past the page edges,
+        forcing a manual Ctrl+scroll out."""
+        rect = page.frame.sceneBoundingRect().adjusted(-FIT_MARGIN, -FIT_MARGIN, FIT_MARGIN, FIT_MARGIN)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
-    def request_fit_to_page(self) -> None:
+    def scroll_to_page(self, page: Page) -> None:
+        """Centers the view on `page` without changing zoom -- used to jump
+        to a page (e.g. right after adding/duplicating one) in a document
+        where every page is already reachable by scrolling."""
+        self.centerOn(page.frame.sceneBoundingRect().center())
+
+    def request_fit_to_page(self, page: Page) -> None:
         """Fit now if the viewport already has real geometry, otherwise defer
-        to the first resizeEvent that gives it one (see `_pending_fit`)."""
+        to the first resizeEvent that gives it one (see `_pending_fit_page`)."""
         if self.viewport().width() > 0 and self.viewport().height() > 0:
-            self.fit_to_page()
-            self._pending_fit = False
+            self.fit_to_page(page)
+            self._pending_fit_page = None
         else:
-            self._pending_fit = True
+            self._pending_fit_page = page
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
-        if self._pending_fit and self.viewport().width() > 0 and self.viewport().height() > 0:
-            self.fit_to_page()
-            self._pending_fit = False
+        if self._pending_fit_page is not None and self.viewport().width() > 0 and self.viewport().height() > 0:
+            self.fit_to_page(self._pending_fit_page)
+            self._pending_fit_page = None
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
@@ -98,7 +109,23 @@ class ZoomableGraphicsView(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        super().paintEvent(event)
+        # Resyncing after every repaint (rather than hooking every individual
+        # cause -- zoom, pan, resize, page add/delete/move/resize, ...) keeps
+        # the overlay labels and active-page tracking correct regardless of
+        # what moved, since all of those already force a repaint anyway.
+        if self.page_overlay_manager is not None:
+            self.page_overlay_manager.sync(self)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        # Computed unconditionally, before the Alt-click branch (which
+        # returns early) -- otherwise Alt+click on empty page space would
+        # leave this stale from whatever the previous plain click hit.
+        scene = cast(DesignScene, self.scene())
+        hit = self.itemAt(event.pos())
+        self._pressed_on_page = next((p for p in scene.pages if p.frame is hit), None)
+
         if event.button() == Qt.MouseButton.LeftButton and event.modifiers() & Qt.KeyboardModifier.AltModifier:
             self._alt_click_select(event)
             return
@@ -129,11 +156,11 @@ class ZoomableGraphicsView(QGraphicsView):
         way to reach something buried under other items without detouring
         through the Layers panel."""
         scene = cast(DesignScene, self.scene())
-        page_frame = getattr(scene, "page_frame", None)
+        frames = scene.page_frames()
         scene_pos = self.mapToScene(event.position().toPoint())
         stack = [
             item for item in scene.items(scene_pos)
-            if item is not page_frame and not is_layer_locked(item)
+            if item not in frames and not is_layer_locked(item)
         ]
         stack.sort(key=lambda item: item.zValue(), reverse=True)
 
@@ -152,11 +179,11 @@ class ZoomableGraphicsView(QGraphicsView):
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         scene = cast(DesignScene, self.scene())
-        page_frame = getattr(scene, "page_frame", None)
+        frames = scene.page_frames()
         scene_pos = self.mapToScene(event.pos())
         images = [
             item for item in scene.items(scene_pos)
-            if item is not page_frame and isinstance(item, ResizablePixmapItem)
+            if item not in frames and isinstance(item, ResizablePixmapItem)
         ]
         if not images:
             super().contextMenuEvent(event)
@@ -234,6 +261,14 @@ class ZoomableGraphicsView(QGraphicsView):
         self._drag_start_positions = {}
         if moved:
             cast(DesignScene, self.scene()).push_move_undo(moved)
+            self.main_app.update_properties_panel()
+
+        scene = cast(DesignScene, self.scene())
+        if not scene.selectedItems():
+            if self._pressed_on_page is not None:
+                self.main_app.show_page_properties(self._pressed_on_page)
+            else:
+                self.main_app.clear_page_properties()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         scene = cast(DesignScene, self.scene())
@@ -255,9 +290,10 @@ class ZoomableGraphicsView(QGraphicsView):
         else:
             super().keyPressEvent(event)
 
-    def _nudge_selection(self, key: Qt.Key, modifiers: Qt.KeyboardModifier) -> None:
+    def _nudge_selection(self, key: int, modifiers: Qt.KeyboardModifier) -> None:
         scene = cast(DesignScene, self.scene())
-        items = [i for i in scene.selectedItems() if i != getattr(scene, "page_frame", None)]
+        frames = scene.page_frames()
+        items = [i for i in scene.selectedItems() if i not in frames]
         if not items:
             return
         step = NUDGE_STEP_LARGE if modifiers & Qt.KeyboardModifier.ShiftModifier else NUDGE_STEP

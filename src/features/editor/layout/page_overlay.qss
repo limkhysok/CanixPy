@@ -1,0 +1,41 @@
+PageLabel, AddPageButton {
+    background-color: $BACKGROUND;
+    border: 1px solid $BORDER;
+    border-radius: 10px;
+}
+QLabel#pageName {
+    color: $TEXT_PRIMARY;
+    font-weight: 600;
+    font-size: 12px;
+}
+QLineEdit#pageNameEdit {
+    color: $TEXT_PRIMARY;
+    background-color: $CANVAS_SURROUND;
+    border: 1px solid $ACCENT;
+    border-radius: 6px;
+    padding: 2px 4px;
+    font-weight: 600;
+    font-size: 12px;
+}
+QToolButton#pageMenuButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 2px 6px;
+    color: $TEXT_SECONDARY;
+    font-weight: 700;
+}
+QToolButton#pageMenuButton:hover {
+    background-color: $ACCENT_LIGHT;
+    color: $TEXT_PRIMARY;
+}
+QToolButton#addPageButton {
+    background-color: $BACKGROUND;
+    border: none;
+    border-radius: 6px;
+    padding: 4px 8px;
+    color: $TEXT_PRIMARY;
+}
+QToolButton#addPageButton:hover {
+    background-color: $ACCENT_LIGHT;
+}

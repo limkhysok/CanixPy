@@ -46,8 +46,10 @@ from src.features.editor.canvas.items import (
     set_layer_name,
     set_shape_kind,
 )
+from src.features.editor.canvas.page import page_for_item
 
 if TYPE_CHECKING:
+    from src.features.editor.canvas.page import Page
     from src.features.editor.canvas.scene import DesignScene
     from src.features.editor.editor_view import CoreDesignApp
 
@@ -276,25 +278,57 @@ def deserialize_item(data: dict[str, Any]) -> QGraphicsItem | None:
     return item
 
 
-def serialize_page(scene: "DesignScene") -> list[dict[str, Any]]:
-    page_frame = getattr(scene, "page_frame", None)
+def serialize_page_items(scene: "DesignScene", page: "Page") -> list[dict[str, Any]]:
+    """Top-level items belonging to `page` (see page_for_item), with y
+    stored *relative to the page's own origin* -- decouples the saved
+    format from whatever PAGE_GAP happens to be in effect at load time, and
+    keeps each page's entry self-contained. Group children are untouched
+    (already relative to their parent group, not the page)."""
+    frames = scene.page_frames()
     result: list[dict[str, Any]] = []
     for item in scene.items():
         # Grouped children are serialized recursively as part of their
         # group (see the QGraphicsItemGroup case in serialize_item), not
         # as separate top-level entries here.
-        if item is page_frame or item.parentItem() is not None:  # type: ignore[reportUnnecessaryComparison]
+        if item in frames or item.parentItem() is not None:
+            continue
+        if page_for_item(scene.pages, item) is not page:
             continue
         data = serialize_item(item)
         if data is not None:
+            data = dict(data)
+            data["y"] -= page.y_offset
             result.append(data)
     return result
 
 
-def serialize_page_entry(scene: "DesignScene") -> dict[str, Any]:
-    entry: dict[str, Any] = {"items": serialize_page(scene)}
-    if scene.page_name:
-        entry["name"] = scene.page_name
+def deserialize_page_items(items_data: list[dict[str, Any]], page: "Page") -> list[QGraphicsItem]:
+    """Inverse of serialize_page_items's y-offset step: builds items via the
+    generic deserialize_item() (which knows nothing about pages, and is also
+    reused by plain copy/paste/duplicate-item, so it must stay page-agnostic)
+    then shifts each into `page`'s absolute scene position."""
+    items: list[QGraphicsItem] = []
+    for item_data in items_data:
+        item = deserialize_item(item_data)
+        if item is not None:
+            item.setPos(item.pos().x(), item.pos().y() + page.y_offset)
+            items.append(item)
+    return items
+
+
+DEFAULT_PAGE_BACKGROUND = "#ffffff"
+
+
+def serialize_page_entry(scene: "DesignScene", page: "Page") -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "items": serialize_page_items(scene, page),
+        "width": page.width,
+        "height": page.height,
+    }
+    if page.name:
+        entry["name"] = page.name
+    if page.background_color != DEFAULT_PAGE_BACKGROUND:
+        entry["background_color"] = page.background_color
     return entry
 
 
@@ -304,7 +338,7 @@ def serialize_project(app: "CoreDesignApp") -> dict[str, Any]:
         "canvas_size": list(app.canvas_size),
         # A plain ordered list -- page order/identity is just list position,
         # so reordering pages doesn't need any renumbering bookkeeping.
-        "pages": [serialize_page_entry(scene) for scene in app.pages],
+        "pages": [serialize_page_entry(app.scene, page) for page in app.scene.pages],
     }
 
 

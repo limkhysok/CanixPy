@@ -1,3 +1,5 @@
+from typing import TYPE_CHECKING
+
 from PySide6.QtWidgets import (
     QColorDialog,
     QGraphicsEllipseItem,
@@ -5,11 +7,16 @@ from PySide6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsTextItem,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QGradient, QLinearGradient, QPen, QTextOption
 
+from src.features.editor.canvas import items
 from src.features.editor.canvas.items import make_shadow_effect
 from src.features.editor.canvas.undo_manager import UndoStack
+
+if TYPE_CHECKING:
+    from src.features.editor.canvas.page import Page
+    from src.features.editor.canvas.scene import DesignScene
 
 DEFAULT_STROKE_WIDTH = 2
 
@@ -146,8 +153,8 @@ class PropertiesPanelViewModel:
     def set_text_alignment(self, item: QGraphicsTextItem, alignment: Qt.AlignmentFlag, undo_stack: UndoStack) -> None:
         # Alignment only has visible effect once the text box has an explicit
         # wrap width -- default it to the current rendered width so alignment
-        # works immediately without requiring manual text-box resizing
-        # (which this app doesn't support; see RotatableTextItem).
+        # works immediately without requiring the user to manually drag-resize
+        # the text box first (see RotatableTextItem).
         if item.textWidth() < 0:
             item.setTextWidth(item.boundingRect().width())
 
@@ -161,3 +168,43 @@ class PropertiesPanelViewModel:
 
         apply(new_option)
         undo_stack.push(lambda: apply(old_option), lambda: apply(new_option))
+
+    def set_item_position(self, item: QGraphicsItem, x: float, y: float, undo_stack: UndoStack) -> None:
+        old_pos = item.pos()
+        new_pos = QPointF(x, y)
+        if old_pos == new_pos:
+            return
+        item.setPos(new_pos)
+        undo_stack.push(lambda: item.setPos(old_pos), lambda: item.setPos(new_pos))
+
+    def set_item_size(
+        self, item: QGraphicsItem, width: float, height: float, undo_stack: UndoStack
+    ) -> tuple[float, float] | None:
+        old = items.get_item_size(item)
+        if old is None:
+            return None
+        new = items.resize_item(item, width, height)
+        if new is None or new == old:
+            return new
+        undo_stack.push(lambda: items.resize_item(item, *old), lambda: items.resize_item(item, *new))
+        return new
+
+    def set_page_size(
+        self, scene: "DesignScene", page: "Page", width: int, height: int, undo_stack: UndoStack
+    ) -> None:
+        old_w, old_h = page.width, page.height
+        if (width, height) == (old_w, old_h):
+            return
+        scene.resize_page(page, width, height)
+        undo_stack.push(
+            lambda: scene.resize_page(page, old_w, old_h), lambda: scene.resize_page(page, width, height)
+        )
+
+    def change_page_background(self, page: "Page", undo_stack: UndoStack) -> None:
+        old_color = QColor(page.background_color)
+        color = QColorDialog.getColor(old_color)
+        if color.isValid():
+            page.set_background_color(color)
+            undo_stack.push(
+                lambda: page.set_background_color(old_color), lambda: page.set_background_color(QColor(color))
+            )

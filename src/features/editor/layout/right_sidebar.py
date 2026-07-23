@@ -6,9 +6,12 @@ from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphics
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from src.core import icons, theme
+from src.features.editor.canvas.items import MIN_SIZE, can_edit_height, get_item_size, is_aspect_locked
 from src.features.editor.properties_viewmodel import PropertiesPanelViewModel
 
 if TYPE_CHECKING:
+    from src.features.editor.canvas.page import Page
+    from src.features.editor.canvas.scene import DesignScene
     from src.features.editor.editor_view import CoreDesignApp
 
 RIGHT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("right_sidebar.qss"))
@@ -26,6 +29,8 @@ PANEL_WIDTH = 300
 
 SECTION_ICONS = {
     "Group": "fa5s.object-group",
+    "Position & Size": "fa5s.arrows-alt",
+    "Page": "fa5s.file-image",
     "Shape Styling": ICON_PALETTE,
     "Stroke": "fa5s.pen",
     "Font Family": "fa5s.font",
@@ -146,8 +151,8 @@ class PropertiesPanel(QWidget):
 
     def inspect_selection(self, items: list[QGraphicsItem]) -> None:
         self.clear_layout()
-        page_frame = getattr(self.main_app.scene, "page_frame", None)
-        real_items = [i for i in items if i != page_frame]
+        frames = self.main_app.scene.page_frames()
+        real_items = [i for i in items if i not in frames]
 
         if not real_items:
             self.show_empty_state()
@@ -161,7 +166,12 @@ class PropertiesPanel(QWidget):
         self.inspect_selection([item] if item else [])
 
     def _inspect_single(self, item: QGraphicsItem) -> None:
-        # 1. Custom settings depending on type
+        # 1. Position & size (every item has X/Y; W/H only for items with an
+        # independent size -- see _add_transform_section)
+        self._add_transform_section(item)
+        self.main_layout.addSpacing(8)
+
+        # 2. Custom settings depending on type
         if isinstance(item, QGraphicsItemGroup):
             btn_ungroup = _button("fa5s.object-ungroup", "Ungroup")
             btn_ungroup.clicked.connect(lambda: self.main_app.scene.ungroup_items([item]))
@@ -256,15 +266,15 @@ class PropertiesPanel(QWidget):
                 align_row.addWidget(btn)
             self.main_layout.addLayout(align_row)
 
-        # 2. Effects (opacity + shadow, available for every item type)
+        # 3. Effects (opacity + shadow, available for every item type)
         self.main_layout.addSpacing(8)
         self._add_effects_section([item])
 
-        # 3. Align to page (only one item selected, so "the page" is the obvious reference)
+        # 4. Align to page (only one item selected, so "the page" is the obvious reference)
         self.main_layout.addSpacing(8)
         self._add_align_section(single_item=True)
 
-        # 4. Arrangement (available for all items)
+        # 5. Arrangement (available for all items)
         self.main_layout.addSpacing(8)
         self.main_layout.addWidget(_section_header("Arrangement"))
 
@@ -375,3 +385,104 @@ class PropertiesPanel(QWidget):
             btn.clicked.connect(lambda _checked=False, e=edge: self.main_app.scene.align_items(e))
             v_row.addWidget(btn)
         self.main_layout.addLayout(v_row)
+
+    def _add_transform_section(self, item: QGraphicsItem) -> None:
+        self.main_layout.addWidget(_section_header("Position & Size"))
+
+        x_box, y_box = QSpinBox(), QSpinBox()
+        for box, prefix, value in ((x_box, "X  ", item.pos().x()), (y_box, "Y  ", item.pos().y())):
+            box.setRange(-100000, 100000)
+            box.setPrefix(prefix)
+            box.setCursor(Qt.CursorShape.IBeamCursor)
+            box.setValue(round(value))
+
+        def on_pos_changed(_value: int = 0) -> None:
+            self.viewmodel.set_item_position(item, x_box.value(), y_box.value(), self.main_app.scene.undo_stack)
+        x_box.valueChanged.connect(on_pos_changed)
+        y_box.valueChanged.connect(on_pos_changed)
+        pos_row = QHBoxLayout()
+        pos_row.addWidget(x_box)
+        pos_row.addWidget(y_box)
+        self.main_layout.addLayout(pos_row)
+
+        size = get_item_size(item)
+        if size is None:
+            return  # e.g. a group -- no independent size to show/edit
+
+        w_box, h_box = QSpinBox(), QSpinBox()
+        for box, prefix, value in ((w_box, "W  ", size[0]), (h_box, "H  ", size[1])):
+            box.setRange(int(MIN_SIZE), 100000)
+            box.setPrefix(prefix)
+            box.setCursor(Qt.CursorShape.IBeamCursor)
+            box.setValue(round(value))
+
+        editable_height = can_edit_height(item)
+        h_box.setEnabled(editable_height)
+        if not editable_height:
+            h_box.setToolTip("Text height follows its content")
+
+        def sync_size_boxes(new_size: tuple[float, float] | None) -> None:
+            # Reflects the item's *real* resulting size back into the boxes --
+            # aspect-locked images silently override whatever height was
+            # asked for (see is_aspect_locked below), so without this the
+            # boxes would show a value that didn't actually stick.
+            if new_size is None:
+                return
+            w_box.blockSignals(True)
+            h_box.blockSignals(True)
+            w_box.setValue(round(new_size[0]))
+            h_box.setValue(round(new_size[1]))
+            w_box.blockSignals(False)
+            h_box.blockSignals(False)
+
+        def on_width_changed(width: int) -> None:
+            new_size = self.viewmodel.set_item_size(item, width, h_box.value(), self.main_app.scene.undo_stack)
+            sync_size_boxes(new_size)
+
+        def on_height_changed(height: int) -> None:
+            width = w_box.value()
+            if is_aspect_locked(item):
+                # The mixin's resize always re-derives height from width for
+                # aspect-locked items, so a plain (width, height) pair would
+                # ignore the height the user just typed -- solve for the
+                # paired width instead so it actually takes effect.
+                current = get_item_size(item)
+                if current is not None and current[1]:
+                    width = height * (current[0] / current[1])
+            new_size = self.viewmodel.set_item_size(item, width, height, self.main_app.scene.undo_stack)
+            sync_size_boxes(new_size)
+
+        w_box.valueChanged.connect(on_width_changed)
+        h_box.valueChanged.connect(on_height_changed)
+        size_row = QHBoxLayout()
+        size_row.addWidget(w_box)
+        size_row.addWidget(h_box)
+        self.main_layout.addLayout(size_row)
+
+    def inspect_page(self, scene: "DesignScene", page: "Page") -> None:
+        self.clear_layout()
+        self.main_layout.addWidget(_section_header("Page"))
+
+        w_box, h_box = QSpinBox(), QSpinBox()
+        for box, prefix, value in ((w_box, "W  ", page.width), (h_box, "H  ", page.height)):
+            box.setRange(100, 10000)
+            box.setPrefix(prefix)
+            box.setCursor(Qt.CursorShape.IBeamCursor)
+            box.setValue(int(value))
+
+        def on_page_size_changed(_value: int = 0) -> None:
+            self.viewmodel.set_page_size(scene, page, w_box.value(), h_box.value(), scene.undo_stack)
+            # No forced view re-fit here -- reflow already keeps geometry
+            # correct, and snapping the viewport to this page on every
+            # keystroke would be jarring if the user is scrolled elsewhere.
+        w_box.valueChanged.connect(on_page_size_changed)
+        h_box.valueChanged.connect(on_page_size_changed)
+        size_row = QHBoxLayout()
+        size_row.addWidget(w_box)
+        size_row.addWidget(h_box)
+        self.main_layout.addLayout(size_row)
+
+        self.main_layout.addSpacing(8)
+        btn_bg = _button(ICON_PALETTE, "Background Color")
+        btn_bg.clicked.connect(lambda: self.viewmodel.change_page_background(page, scene.undo_stack))
+        self.main_layout.addWidget(btn_bg)

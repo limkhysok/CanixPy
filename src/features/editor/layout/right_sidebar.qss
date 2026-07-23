@@ -48,16 +48,96 @@ QPushButton#toggleButton:checked:hover {
 
 /* Inputs -- rounded, sage focus ring on the field the user is editing. */
 PropertiesPanel QFontComboBox, PropertiesPanel QSpinBox {
+    background-color: $BACKGROUND;
     border: 1px solid $BORDER;
-    border-radius: 8px;
-    padding: 6px 8px;
+    border-radius: 9px;
+    padding: 7px 10px;
+    min-height: 22px;
+    color: $TEXT_PRIMARY;
+    font-weight: 500;
+    selection-background-color: $ACCENT_LIGHT;
+    selection-color: $TEXT_PRIMARY;
 }
 PropertiesPanel QFontComboBox:hover, PropertiesPanel QSpinBox:hover {
     border-color: $ACCENT;
 }
 PropertiesPanel QFontComboBox:focus, PropertiesPanel QSpinBox:focus {
-    border: 1px solid $ACCENT;
+    border: 1px solid $ACCENT_PRESSED;
     outline: none;
+}
+PropertiesPanel QSpinBox:disabled, PropertiesPanel QFontComboBox:disabled {
+    background-color: $CANVAS_SURROUND;
+    color: $TEXT_SECONDARY;
+    border-color: $BORDER;
+}
+
+/* Spin buttons -- a distinct stepper column (a permanent soft tint, not just
+   on hover, so it reads as a control rather than a stray sliver) with clear
+   hover/press feedback and a divider off the number field. */
+PropertiesPanel QSpinBox {
+    padding-right: 4px;
+}
+PropertiesPanel QSpinBox::up-button, PropertiesPanel QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 20px;
+    border: none;
+    border-left: 1px solid $BORDER;
+    background-color: $CANVAS_SURROUND;
+}
+PropertiesPanel QSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 8px;
+    margin: 1px 1px 0 0;
+}
+PropertiesPanel QSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 8px;
+    margin: 0 1px 1px 0;
+}
+PropertiesPanel QSpinBox::up-button:hover, PropertiesPanel QSpinBox::down-button:hover {
+    background-color: $ACCENT_LIGHT;
+}
+PropertiesPanel QSpinBox::up-button:pressed, PropertiesPanel QSpinBox::down-button:pressed {
+    background-color: $ACCENT_PRESSED;
+}
+PropertiesPanel QSpinBox::up-button:disabled, PropertiesPanel QSpinBox::down-button:disabled {
+    background-color: transparent;
+}
+/* Once the up/down buttons carry any QSS of their own, Qt stops drawing the
+   platform's native arrow glyph on them and ::up-arrow/::down-arrow render
+   blank unless given an explicit image -- fake the triangle with borders
+   instead of shipping an icon asset. */
+PropertiesPanel QSpinBox::up-arrow, PropertiesPanel QSpinBox::down-arrow {
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+}
+PropertiesPanel QSpinBox::up-arrow {
+    border-bottom: 5px solid $TEXT_SECONDARY;
+    margin-top: 2px;
+}
+PropertiesPanel QSpinBox::down-arrow {
+    border-top: 5px solid $TEXT_SECONDARY;
+    margin-bottom: 2px;
+}
+PropertiesPanel QSpinBox::up-arrow:hover {
+    border-bottom-color: $ACCENT_PRESSED;
+}
+PropertiesPanel QSpinBox::down-arrow:hover {
+    border-top-color: $ACCENT_PRESSED;
+}
+PropertiesPanel QSpinBox::up-arrow:pressed {
+    border-bottom-color: $TEXT_ON_ACCENT;
+}
+PropertiesPanel QSpinBox::down-arrow:pressed {
+    border-top-color: $TEXT_ON_ACCENT;
+}
+PropertiesPanel QSpinBox::up-arrow:disabled {
+    border-bottom-color: $BORDER;
+}
+PropertiesPanel QSpinBox::down-arrow:disabled {
+    border-top-color: $BORDER;
 }
 
 PropertiesPanel QCheckBox {

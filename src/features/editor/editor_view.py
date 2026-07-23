@@ -5,9 +5,11 @@ from PySide6.QtCore import Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QFileDialog, QGraphicsItem, QHBoxLayout, QMainWindow, QVBoxLayout, QWidget
 from src.features.editor import persistence
+from src.features.editor.canvas.page import Page, page_for_item
 from src.features.editor.canvas.scene import DesignScene
 from src.features.editor.canvas.view import ZoomableGraphicsView
 from src.features.editor.layout.left_sidebar import LeftSidebar
+from src.features.editor.layout.page_overlay import PageOverlayManager
 from src.features.editor.layout.right_sidebar import PropertiesPanel
 from src.features.editor.layout.top_navbar import TopNavbar
 from src.features.editor.exporter import export_scene_to_jpg, export_scene_to_pdf, export_scene_to_png
@@ -23,8 +25,13 @@ class CoreDesignApp(QMainWindow):
         self.setGeometry(100, 100, 1300, 800)
 
         self.canvas_size = canvas_size
-        self.pages: list[DesignScene] = []
-        self.current_page_index: int = 0  # index into self.pages
+        # Index into self.scene.pages -- the page most recently interacted
+        # with (clicked, selected an item on, scrolled to center on), used by
+        # Export and the Properties panel's page-inspect view, both of which
+        # need exactly one page in context even though every page is visible
+        # at once. See set_active_page().
+        self.active_page_index: int = 0
+        self._active_properties_page: Page | None = None
         self._clipboard: list[dict[str, Any]] = []
 
         self.init_ui()
@@ -54,24 +61,27 @@ class CoreDesignApp(QMainWindow):
         # --- TOP NAVBAR ---
         self.top_navbar = TopNavbar(self)
         self.top_navbar.back_clicked.connect(self.back_to_home.emit)
-        self.page_selector = self.top_navbar.page_selector
 
         # --- PANEL SYSTEM SETUP ---
-        # Instantiate our upgraded LeftSidebar panel module
         self.left_panel = LeftSidebar(self)
         self.properties_panel = PropertiesPanel(self)
 
         # --- CANVAS SETUP ---
-        # Page 1 is created directly (not via switch_to_page) so there's never
-        # a throwaway scene: an unparented DesignScene that briefly exists only
-        # to be immediately discarded is a real crash risk -- once nothing
-        # references it, Python's *cyclic* GC (non-deterministic timing) can
-        # collect it later and invalidate its C++ side out from under a signal
-        # callback ("Internal C++ object already deleted").
-        self.pages = [DesignScene(self, *self.canvas_size)]
-        self.scene = self.pages[0]
+        # One shared scene for the whole document -- pages are stacked
+        # regions within it (see DesignScene.add_page), not separate scenes
+        # swapped in and out.
+        self.scene = DesignScene(self)
+        self.scene.add_page(*self.canvas_size)
         self.view = ZoomableGraphicsView(self.scene, self)
-        self._rebuild_page_selector()
+
+        # Per-page floating labels (name/rename/duplicate/delete/move) + a
+        # trailing Add Page button, parented onto the viewport and
+        # repositioned every repaint -- see ZoomableGraphicsView.paintEvent.
+        self.page_overlay_manager = PageOverlayManager(self, self.view.viewport())
+        self.page_overlay_manager.rebuild()
+        self.view.page_overlay_manager = self.page_overlay_manager
+
+        self.set_active_page(self.scene.pages[0])
 
         # Assembly
         content_layout.addWidget(self.left_panel, 1)
@@ -84,87 +94,104 @@ class CoreDesignApp(QMainWindow):
 
     def zoom_in(self) -> None: self.view.scale(1.2, 1.2)
     def zoom_out(self) -> None: self.view.scale(0.8, 0.8)
-    def zoom_reset(self) -> None: self.view.fit_to_page()
+    def zoom_reset(self) -> None: self.view.fit_to_page(self.active_page)
 
-    def _page_label(self, index: int) -> str:
-        return self.pages[index].page_name or f"Page {index + 1}"
+    # --- ACTIVE PAGE ---------------------------------------------------
+    @property
+    def active_page(self) -> Page:
+        index = min(self.active_page_index, len(self.scene.pages) - 1)
+        return self.scene.pages[index]
 
-    def _rebuild_page_selector(self) -> None:
-        # Page identity is just list position -- rebuilding the whole combo
-        # from self.pages after any add/duplicate/delete/move keeps its
-        # labels and order trivially in sync, no incremental patching needed.
-        self.page_selector.blockSignals(True)
-        self.page_selector.clear()
-        for i in range(len(self.pages)):
-            self.page_selector.addItem(self._page_label(i))
-        self.page_selector.setCurrentIndex(self.current_page_index)
-        self.page_selector.blockSignals(False)
-
-    def on_page_combo_changed(self, index: int) -> None:
-        if index >= 0:
-            self.switch_to_page(index)
-
-    def switch_to_page(self, index: int) -> None:
-        if not (0 <= index < len(self.pages)):
+    def set_active_page(self, page: Page) -> None:
+        try:
+            index = self.scene.pages.index(page)
+        except ValueError:
             return
-        self.current_page_index = index
-        self.scene = self.pages[index]
-        self.view.setScene(self.scene)
-        self.view.request_fit_to_page()
-        if self.page_selector.currentIndex() != index:
-            self.page_selector.blockSignals(True)
-            self.page_selector.setCurrentIndex(index)
-            self.page_selector.blockSignals(False)
+        changed = index != self.active_page_index
+        self.active_page_index = index
+        if changed:
+            self.left_panel.layers_panel.refresh()
+
+    def _page_label(self, page: Page) -> str:
+        index = self.scene.pages.index(page)
+        return page.name or f"Page {index + 1}"
+
+    def _sync_active_page_from_selection(self) -> None:
+        selected = self.scene.selectedItems()
+        if selected:
+            self.set_active_page(page_for_item(self.scene.pages, selected[0]))
+
+    # --- PAGE CRUD -------------------------------------------------------
+    def add_new_page(self) -> None:
+        page = self.scene.add_page(*self.canvas_size)
+        self.page_overlay_manager.rebuild()
+        self.set_active_page(page)
+        self.view.scroll_to_page(page)
         self.refresh_editor_panels()
 
-    def add_new_page(self) -> None:
-        self.pages.append(DesignScene(self, *self.canvas_size))
-        self._rebuild_page_selector()
-        self.switch_to_page(len(self.pages) - 1)
+    def duplicate_page(self, source: Page) -> None:
+        new_page = self.scene.insert_page_after(
+            source, int(source.width), int(source.height), source.background_color
+        )
+        items_data = persistence.serialize_page_items(self.scene, source)
+        # No undo entry -- page-level actions (add/delete/duplicate/move)
+        # aren't undoable at all yet (a pre-existing gap, not new here), and
+        # add_items_with_undo would leave a half-broken entry that removes
+        # the duplicated items but not the duplicated page frame itself.
+        self.scene.add_items(persistence.deserialize_page_items(items_data, new_page))
+        new_page.name = f"{self._page_label(source)} Copy"
 
-    def duplicate_current_page(self) -> None:
-        source = self.pages[self.current_page_index]
-        new_scene = DesignScene(self, *self.canvas_size)
-        for item_data in persistence.serialize_page(source):
-            item = persistence.deserialize_item(item_data)
-            if item:
-                new_scene.addItem(item)
-        new_scene.page_name = f"{self._page_label(self.current_page_index)} Copy"
+        self.page_overlay_manager.rebuild()
+        self.set_active_page(new_page)
+        self.view.scroll_to_page(new_page)
+        self.refresh_editor_panels()
 
-        insert_at = self.current_page_index + 1
-        self.pages.insert(insert_at, new_scene)
-        self._rebuild_page_selector()
-        self.switch_to_page(insert_at)
-
-    def delete_current_page(self) -> None:
-        if len(self.pages) <= 1:
+    def delete_page(self, page: Page) -> None:
+        if len(self.scene.pages) <= 1:
             return  # always keep at least one page
-        del self.pages[self.current_page_index]
-        self._rebuild_page_selector()
-        self.switch_to_page(min(self.current_page_index, len(self.pages) - 1))
+        was_active = page is self.active_page
+        self.scene.delete_page(page)
+        self.page_overlay_manager.rebuild()
+        if was_active:
+            new_index = min(self.active_page_index, len(self.scene.pages) - 1)
+            self.set_active_page(self.scene.pages[new_index])
+        self.refresh_editor_panels()
 
-    def move_current_page(self, delta: int) -> None:
-        index = self.current_page_index
-        new_index = index + delta
-        if not (0 <= new_index < len(self.pages)):
-            return
-        self.pages[index], self.pages[new_index] = self.pages[new_index], self.pages[index]
-        self._rebuild_page_selector()
-        self.switch_to_page(new_index)
+    def move_page(self, page: Page, delta: int) -> None:
+        self.scene.move_page(page, delta)
+        self.page_overlay_manager.rebuild()
+        self.refresh_editor_panels()
 
-    def rename_current_page(self, name: str) -> None:
+    def rename_page(self, page: Page, name: str) -> None:
         name = name.strip()
-        current_default = f"Page {self.current_page_index + 1}"
-        self.pages[self.current_page_index].page_name = name if name and name != current_default else None
-        self._rebuild_page_selector()
+        index = self.scene.pages.index(page)
+        default_name = f"Page {index + 1}"
+        page.name = name if name and name != default_name else None
 
     def update_properties_panel(self) -> None:
-        self.properties_panel.inspect_selection(self.scene.selectedItems())
+        selected = self.scene.selectedItems()
+        if selected:
+            self._active_properties_page = None
+            self.properties_panel.inspect_selection(selected)
+        elif self._active_properties_page is not None:
+            self.properties_panel.inspect_page(self.scene, self._active_properties_page)
+        else:
+            self.properties_panel.inspect_selection([])
+
+    def show_page_properties(self, page: Page) -> None:
+        self._active_properties_page = page
+        self.set_active_page(page)
+        self.update_properties_panel()
+
+    def clear_page_properties(self) -> None:
+        self._active_properties_page = None
+        self.update_properties_panel()
 
     def refresh_editor_panels(self) -> None:
         """Full rebuild: call after anything that adds/removes/reorders items."""
         if not shiboken6.isValid(self.scene):
             return  # scene's C++ side is mid-teardown (app closing); nothing to refresh
+        self._sync_active_page_from_selection()
         self.update_properties_panel()
         self.left_panel.layers_panel.refresh()
         self.update_history_buttons()
@@ -173,6 +200,7 @@ class CoreDesignApp(QMainWindow):
         """Lighter sync: call on plain selection changes (no structural change)."""
         if not shiboken6.isValid(self.scene):
             return  # scene's C++ side is mid-teardown (app closing); nothing to sync
+        self._sync_active_page_from_selection()
         self.update_properties_panel()
         self.left_panel.layers_panel.sync_selection()
 
@@ -189,16 +217,16 @@ class CoreDesignApp(QMainWindow):
 
     # --- CLIPBOARD (copy / paste / duplicate) ---
     def copy_selection(self) -> None:
-        page_frame = getattr(self.scene, "page_frame", None)
-        items = [i for i in self.scene.selectedItems() if i != page_frame]
+        frames = self.scene.page_frames()
+        items = [i for i in self.scene.selectedItems() if i not in frames]
         self._clipboard = [d for i in items if (d := persistence.serialize_item(i)) is not None]
 
     def paste_clipboard(self) -> None:
         self._paste_data(self._clipboard)
 
     def duplicate_selection(self) -> None:
-        page_frame = getattr(self.scene, "page_frame", None)
-        items = [i for i in self.scene.selectedItems() if i != page_frame]
+        frames = self.scene.page_frames()
+        items = [i for i in self.scene.selectedItems() if i not in frames]
         self.duplicate_items(items)
 
     def duplicate_items(self, items: list[QGraphicsItem]) -> None:
@@ -245,62 +273,66 @@ class CoreDesignApp(QMainWindow):
         self.apply_project_data(data)
 
     def apply_project_data(self, data: dict[str, Any]) -> None:
-        """Replace all pages with a previously-serialized project (see
-        persistence.serialize_project). Used both by File > Open and by the
-        Home screen restoring a task's saved editor content."""
+        """Replace the whole document with a previously-serialized project
+        (see persistence.serialize_project). Used both by File > Open and by
+        the Home screen restoring a task's saved editor content."""
         canvas_size = data.get("canvas_size")
         if canvas_size and len(canvas_size) == 2:
             self.canvas_size = (int(canvas_size[0]), int(canvas_size[1]))
 
-        pages_data: list[dict[str, Any]] = data.get("pages", [])
-        new_pages: list[DesignScene] = []
-        for page_entry in pages_data:
-            scene = DesignScene(self, *self.canvas_size)
-            scene.page_name = page_entry.get("name")
-            for item_data in page_entry.get("items", []):
-                item = persistence.deserialize_item(item_data)
-                if item:
-                    scene.addItem(item)
-            new_pages.append(scene)
+        self._active_properties_page = None
+        self.active_page_index = 0
 
-        self.pages = new_pages or [DesignScene(self, *self.canvas_size)]
-        self.current_page_index = 0
-        self.scene = self.pages[0]
+        new_scene = DesignScene(self)
+        pages_data: list[dict[str, Any]] = data.get("pages", [])
+        for page_entry in pages_data:
+            width = int(page_entry.get("width", self.canvas_size[0]))
+            height = int(page_entry.get("height", self.canvas_size[1]))
+            background_color = page_entry.get("background_color", "#ffffff")
+            page = new_scene.add_page(width, height, background_color, page_entry.get("name"))
+            new_scene.add_items(persistence.deserialize_page_items(page_entry.get("items", []), page))
+        if not new_scene.pages:
+            new_scene.add_page(*self.canvas_size)
+
+        self.scene = new_scene
         self.view.setScene(self.scene)
-        self.view.request_fit_to_page()
-        self._rebuild_page_selector()
+        self.page_overlay_manager.rebuild()
+        self.view.request_fit_to_page(self.scene.pages[0])
+        self.set_active_page(self.scene.pages[0])
         self.refresh_editor_panels()
 
     # --- EXPORT ---
     def export_page_to_png(self) -> None:
-        self._export(f"design_page_{self.current_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png)
+        self._export(f"design_page_{self.active_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png)
 
     def export_page_to_png_transparent(self) -> None:
         self._export(
-            f"design_page_{self.current_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png_transparent
+            f"design_page_{self.active_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png_transparent
         )
 
     def export_page_to_jpg(self) -> None:
-        self._export(f"design_page_{self.current_page_index + 1}.jpg", "JPG Image (*.jpg)", self._do_export_jpg)
+        self._export(f"design_page_{self.active_page_index + 1}.jpg", "JPG Image (*.jpg)", self._do_export_jpg)
 
     def export_page_to_pdf(self) -> None:
-        self._export(f"design_page_{self.current_page_index + 1}.pdf", "PDF Document (*.pdf)", self._do_export_pdf)
+        self._export(f"design_page_{self.active_page_index + 1}.pdf", "PDF Document (*.pdf)", self._do_export_pdf)
 
-    def _export(self, default_name: str, file_filter: str, do_export: Callable[[str, int, int], None]) -> None:
+    def _export(self, default_name: str, file_filter: str, do_export: Callable[[str, Page], None]) -> None:
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Page", default_name, file_filter)
         if not file_path:
             return
-        width, height = self.canvas_size
-        do_export(file_path, width, height)
+        # The active page's actual size, not an app-level default -- a page
+        # resized via the Properties panel would otherwise silently export
+        # at the wrong dimensions.
+        do_export(file_path, self.active_page)
 
-    def _do_export_png(self, file_path: str, width: int, height: int) -> None:
-        export_scene_to_png(self.scene, file_path, width, height)
+    def _do_export_png(self, file_path: str, page: Page) -> None:
+        export_scene_to_png(self.scene, file_path, page)
 
-    def _do_export_png_transparent(self, file_path: str, width: int, height: int) -> None:
-        export_scene_to_png(self.scene, file_path, width, height, transparent=True)
+    def _do_export_png_transparent(self, file_path: str, page: Page) -> None:
+        export_scene_to_png(self.scene, file_path, page, transparent=True)
 
-    def _do_export_jpg(self, file_path: str, width: int, height: int) -> None:
-        export_scene_to_jpg(self.scene, file_path, width, height)
+    def _do_export_jpg(self, file_path: str, page: Page) -> None:
+        export_scene_to_jpg(self.scene, file_path, page)
 
-    def _do_export_pdf(self, file_path: str, width: int, height: int) -> None:
-        export_scene_to_pdf(self.scene, file_path, width, height)
+    def _do_export_pdf(self, file_path: str, page: Page) -> None:
+        export_scene_to_pdf(self.scene, file_path, page)

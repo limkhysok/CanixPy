@@ -1,11 +1,17 @@
 import os
+import sys
 
 # Must be set before any Qt-related import (including qtawesome, which relies on
 # qtpy to pick a binding). Without this, qtpy may auto-detect PyQt6 instead of
 # PySide6 if both are installed, which breaks icon rendering.
 os.environ.setdefault("QT_API", "pyside6")
+# Use FreeType instead of DirectWrite for font rendering on Windows. DirectWrite
+# fails to build font faces for legacy bitmap-only fonts (e.g. "Fixedsys") that
+# are still registered on the system, logging spurious errors during Qt's font
+# enumeration at startup.
+if sys.platform == "win32":
+    os.environ.setdefault("QT_QPA_PLATFORM", "windows:fontengine=freetype")
 
-import sys
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 from src.core.fonts import load_app_fonts

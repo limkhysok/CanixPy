@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Callable, cast
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt
 from PySide6.QtGui import QColor, QCursor, QFocusEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
@@ -23,11 +23,13 @@ from PySide6.QtWidgets import (
     QGraphicsSceneHoverEvent,
     QGraphicsSceneMouseEvent,
     QGraphicsTextItem,
+    QStyle,
     QStyleOptionGraphicsItem,
     QWidget,
 )
 
 from src.core import theme
+from src.features.editor.canvas.snapping import SNAP_THRESHOLD_PX, compute_snap
 
 if TYPE_CHECKING:
     from src.features.editor.canvas.scene import DesignScene
@@ -127,6 +129,15 @@ class _HandleMixin(_HandleMixinBase):
         self._rotating = False
         self._rotate_start_angle = 0.0
         self._rotate_start_rotation = 0.0
+        self._plain_dragging = False
+
+    def _typed_scene(self) -> "DesignScene | None":
+        # QGraphicsItem.scene() is typed as always returning a QGraphicsScene,
+        # but at runtime it's None until the item is actually added to one --
+        # this narrows to the app's real DesignScene subclass everywhere
+        # resize/rotate/drag code below needs its DesignScene-only members
+        # (undo_stack, snap_targets, ...).
+        return cast("DesignScene | None", self.scene())
 
     # -- geometry (implemented per subclass) -----------------------------
     def local_rect(self) -> QRectF:
@@ -197,9 +208,7 @@ class _HandleMixin(_HandleMixinBase):
         clickable size on screen no matter how zoomed out the view is or how
         small the item itself has been scaled -- see the HANDLE_*_PX comment
         above `_HandleMixin` for why that matters."""
-        # See _push_undo below -- scene() is typed as always non-None but is
-        # actually None until the item is added to a scene.
-        scene = cast("DesignScene | None", self.scene())
+        scene = self._typed_scene()
         if scene is None:
             return 1.0
         views = scene.views()
@@ -247,6 +256,17 @@ class _HandleMixin(_HandleMixinBase):
         return None
 
     # -- painting ---------------------------------------------------------
+    def _unselected_option(self, option: QStyleOptionGraphicsItem) -> QStyleOptionGraphicsItem:
+        """Strip State_Selected before delegating to the stock item's
+        paint(). Every stock QGraphics*Item class draws its own black/white
+        dashed selection rectangle whenever this flag is set; this app draws
+        its own accent-colored handles instead (see _paint_handles), so
+        without stripping the flag both would be drawn on top of each
+        other."""
+        stripped = QStyleOptionGraphicsItem(option)
+        stripped.state &= ~QStyle.StateFlag.State_Selected  # type: ignore[attr-defined]
+        return stripped
+
     def _paint_handles(self, painter: QPainter) -> None:
         if not self.isSelected():
             return
@@ -290,6 +310,13 @@ class _HandleMixin(_HandleMixinBase):
                 self._resize_changed = False
                 event.accept()
                 return
+        # Falling through to Qt's own default press/move/release handling --
+        # that's what actually translates the item on drag (see itemChange
+        # below), so mark the window during which a position change is a
+        # real user drag rather than a programmatic setPos() (undo/redo,
+        # initial placement, align/distribute, nudging, ...) that snapping
+        # should leave alone.
+        self._plain_dragging = True
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
@@ -321,6 +348,7 @@ class _HandleMixin(_HandleMixinBase):
                     lambda: self.setRotation(old_rotation),
                     lambda: self.setRotation(new_rotation),
                 )
+            self._refresh_properties_panel()
             event.accept()
             return
         if self._active_handle:
@@ -332,22 +360,73 @@ class _HandleMixin(_HandleMixinBase):
                     lambda: self._apply_resize(old_rect),
                     lambda: self._apply_resize(new_rect),
                 )
+            self._refresh_properties_panel()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+        self._plain_dragging = False
+        scene = self._typed_scene()
+        if scene is not None:
+            scene.clear_snap_guides()
+
+    # -- magnetic snap while dragging (not resizing/rotating) -------------
+    def itemChange(  # noqa: N802
+        self, change: QGraphicsItem.GraphicsItemChange, value: object
+    ) -> object:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self._plain_dragging:
+            scene = self._typed_scene()
+            # Multi-item drags move every selected item independently through
+            # this same hook with no shared leader to coordinate a common
+            # correction, so snapping only engages for a single selected item
+            # -- otherwise the group would skew apart as each item snaps to a
+            # different, slightly different offset.
+            if scene is not None and len(scene.selectedItems()) == 1:
+                new_pos = cast(QPointF, value)
+                delta = new_pos - self.pos()
+                # self.pos() is still the pre-change position here -- Qt calls
+                # itemChange() before applying it -- so this is the item's
+                # real current on-screen rect, safe to translate by the
+                # proposed delta below (rotation/scale aren't changing).
+                proposed_rect = self.mapRectToScene(self.local_rect()).translated(delta)
+                threshold = SNAP_THRESHOLD_PX / self._device_scale()
+                dx, dy, guides = compute_snap(proposed_rect, scene.snap_targets(self), threshold)
+                scene.show_snap_guides(guides)
+                return new_pos + QPointF(dx, dy)
+        return super().itemChange(change, value)
 
     def _push_undo(self, undo_fn: Callable[[], None], redo_fn: Callable[[], None]) -> None:
-        # QGraphicsItem.scene() is typed as always returning a QGraphicsScene,
-        # but at runtime it's None until the item is actually added to one --
-        # cast to the real (possibly-None) DesignScene so callers before that
-        # point don't crash, and so the DesignScene-only `.undo_stack` below
-        # type-checks against the real class instead of the generic base.
-        scene = cast("DesignScene | None", self.scene())
+        scene = self._typed_scene()
         if scene is not None:
             scene.undo_stack.push(undo_fn, redo_fn)
 
+    def _refresh_properties_panel(self) -> None:
+        # Position & Size fields in the Properties panel (see right_sidebar.py)
+        # don't update live during a drag -- refresh them once the resize/
+        # rotate gesture actually finishes instead.
+        scene = self._typed_scene()
+        if scene is not None:
+            scene.main_app.update_properties_panel()
+
+    # -- typed size entry (Properties panel W/H fields) --------------------
+    def set_size(self, width: float, height: float) -> None:
+        # Reuses each subclass's own _resize_reference_rect()/
+        # _resize_target_rect()/_apply_resize() overrides -- already handle
+        # local-vs-scene coordinates, aspect lock (pixmap), and the width-only
+        # pin (text) for handle-drag resizing, so a typed W/H entry (anchored
+        # at the current top-left, since there's no drag handle/corner to
+        # anchor from) gets all of that for free instead of re-deriving it.
+        width = max(width, MIN_SIZE)
+        height = max(height, MIN_SIZE)
+        base = self._resize_reference_rect()
+        requested = QRectF(base.topLeft(), QSizeF(width, height))
+        self._apply_resize(self._resize_target_rect(requested))
+
 
 class ResizableRectItem(_HandleMixin, QGraphicsRectItem):
+    # Corner-only, matching every other item's 4-handle look -- freeform
+    # (width/height still independent), just without the extra edge handles.
+    RESIZE_HANDLES = _CORNER_HANDLES
+
     def local_rect(self) -> QRectF:
         return self.rect()
 
@@ -355,11 +434,13 @@ class ResizableRectItem(_HandleMixin, QGraphicsRectItem):
         self.setRect(rect)
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
-        super().paint(painter, option, widget)
+        super().paint(painter, self._unselected_option(option), widget)
         self._paint_handles(painter)
 
 
 class ResizableEllipseItem(_HandleMixin, QGraphicsEllipseItem):
+    RESIZE_HANDLES = _CORNER_HANDLES
+
     def local_rect(self) -> QRectF:
         return self.rect()
 
@@ -367,7 +448,7 @@ class ResizableEllipseItem(_HandleMixin, QGraphicsEllipseItem):
         self.setRect(rect)
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
-        super().paint(painter, option, widget)
+        super().paint(painter, self._unselected_option(option), widget)
         self._paint_handles(painter)
 
 
@@ -432,7 +513,7 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
         # QGraphicsPixmapItem.paint's stub (unlike QGraphicsItem's) omits the
         # Optional here even though Qt allows a null widget -- cast rather
         # than narrow our own signature away from the real base contract.
-        super().paint(painter, option, cast(QWidget, widget))
+        super().paint(painter, self._unselected_option(option), cast(QWidget, widget))
         self._paint_handles(painter)
 
 
@@ -463,6 +544,10 @@ class ResizablePolygonItem(_HandleMixin, QGraphicsPolygonItem):
     class each. `shape_kind` is kept (not just the raw points) so the layers
     panel and persistence can identify which template an instance uses."""
 
+    # Corner-only, matching every other item's 4-handle look -- freeform
+    # (width/height still independent), just without the extra edge handles.
+    RESIZE_HANDLES = _CORNER_HANDLES
+
     def __init__(self, shape_kind: str, width: float, height: float, parent: QGraphicsItem | None = None) -> None:
         super().__init__(parent)
         self.shape_kind = shape_kind
@@ -483,7 +568,7 @@ class ResizablePolygonItem(_HandleMixin, QGraphicsPolygonItem):
         self.setPolygon(QPolygonF(points))
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
-        super().paint(painter, option, widget)
+        super().paint(painter, self._unselected_option(option), widget)
         self._paint_handles(painter)
 
 
@@ -527,11 +612,19 @@ def set_shape_kind(item: QGraphicsItem, shape_kind: str) -> None:
 
 
 class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
-    """Text supports rotation only -- resizing a text box's width/height
-    doesn't map cleanly onto font scale vs. reflow, and font size already
-    has its own control in the Properties panel."""
+    """Text supports rotation plus horizontal resizing: dragging a corner
+    handle sets an explicit wrap width and the text reflows inside it.
+    Corner handles are offered (matching every other item's 4-handle look)
+    but only their horizontal component does anything -- height has no
+    independent value to set (QGraphicsTextItem lays out purely from
+    textWidth; height always follows whatever the wrapped content needs), so
+    vertical drag is ignored rather than fighting the reflowed height every
+    frame or dragging the box vertically (see _resize_target_rect). Font
+    size keeps its own control in the Properties panel; this only changes
+    wrap width, not scale.
+    """
 
-    RESIZE_HANDLES: tuple[str, ...] = ()
+    RESIZE_HANDLES: tuple[str, ...] = _CORNER_HANDLES
 
     def local_rect(self) -> QRectF:
         # Must call the unbound QGraphicsTextItem implementation directly --
@@ -539,8 +632,36 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
         # (which calls `local_rect()`), recursing infinitely.
         return QGraphicsTextItem.boundingRect(self)
 
+    def _resize_reference_rect(self) -> QRectF:
+        # Scene coordinates, not local -- _apply_resize() below calls
+        # setPos() on every move, so (like ResizablePixmapItem) local
+        # coordinates would drift mid-drag against a transform that's
+        # changing under them. See _resize_delta().
+        return self.mapRectToScene(self.local_rect())
+
+    def _resize_delta(self, event: QGraphicsSceneMouseEvent) -> QPointF:
+        assert self._resize_start_scene_pos is not None
+        return event.scenePos() - self._resize_start_scene_pos
+
+    def _resize_target_rect(self, rect: QRectF) -> QRectF:
+        # Pin top/bottom back to their drag-start values -- only rect.left()/
+        # right() (i.e. width) is ever real for text (see class docstring).
+        # Without this, "tl"/"tr"/"bl"/"br" would also drag rect.top() or
+        # bottom() per the raw two-axis handle math in _resized_rect(),
+        # moving the box vertically for no visible reason since _apply_resize
+        # never uses height.
+        start = self._resize_start_rect
+        if start is None:
+            return rect
+        return QRectF(rect.left(), start.top(), rect.width(), start.height())
+
     def _apply_resize(self, rect: QRectF) -> None:
-        return  # not supported
+        # rect.top() is always pinned to the drag-start value (see
+        # _resize_target_rect), so topLeft() is exactly the scene position
+        # the anchor edge (whichever one wasn't dragged) needs to stay at,
+        # self-contained and safe to replay later for undo/redo.
+        self.setTextWidth(max(rect.width(), MIN_SIZE))
+        self.setPos(rect.topLeft())
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         # Items are created with NoTextInteraction so a single click
@@ -562,5 +683,42 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
         # See ResizablePixmapItem.paint -- QGraphicsTextItem's stub has the
         # same Optional-less `widget` mismatch against the real base contract.
-        super().paint(painter, option, cast(QWidget, widget))
+        super().paint(painter, self._unselected_option(option), cast(QWidget, widget))
         self._paint_handles(painter)
+
+
+# -- size accessors for the Properties panel's Position & Size fields ------
+# Free functions (not methods on the private _HandleMixin) so callers outside
+# this module -- e.g. right_sidebar.py -- don't need to import/depend on it,
+# matching the get_layer_name()/is_layer_locked() convention above.
+def get_item_size(item: QGraphicsItem) -> tuple[float, float] | None:
+    """(width, height) in scene units, or None for an item with no
+    independent size (e.g. a QGraphicsItemGroup). Pixmap items report their
+    *displayed* size (local_rect() scaled by item.scale()), not the native
+    pixmap size, since that's what the user actually sees/expects to edit."""
+    if not isinstance(item, _HandleMixin):
+        return None
+    rect = item.local_rect()
+    if isinstance(item, ResizablePixmapItem):
+        return rect.width() * item.scale(), rect.height() * item.scale()
+    return rect.width(), rect.height()
+
+
+def can_edit_height(item: QGraphicsItem) -> bool:
+    # Text height always follows the wrapped content -- see RotatableTextItem.
+    return not isinstance(item, RotatableTextItem)
+
+
+def is_aspect_locked(item: QGraphicsItem) -> bool:
+    return isinstance(item, ResizablePixmapItem)
+
+
+def resize_item(item: QGraphicsItem, width: float, height: float) -> tuple[float, float] | None:
+    """Applies a typed width/height (see _HandleMixin.set_size) and returns
+    the item's real resulting size -- which may differ from what was asked
+    for (aspect lock on images, height ignored entirely for text) -- or None
+    if the item has no independent size to set."""
+    if not isinstance(item, _HandleMixin):
+        return None
+    item.set_size(width, height)
+    return get_item_size(item)

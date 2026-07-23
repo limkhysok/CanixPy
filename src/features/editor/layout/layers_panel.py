@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from src.core import icons, theme
 from src.features.editor.canvas.items import ResizablePolygonItem, get_layer_name, is_layer_locked, set_layer_locked, set_layer_name
+from src.features.editor.canvas.page import page_for_item
 
 if TYPE_CHECKING:
     from src.features.editor.editor_view import CoreDesignApp
@@ -220,10 +221,16 @@ class LayersPanel(QWidget):
 
     def _items_front_to_back(self) -> list[QGraphicsItem]:
         scene = self.main_app.scene
-        page_frame = getattr(scene, "page_frame", None)
+        frames = scene.page_frames()
+        active_page = self.main_app.active_page
+        # Scoped to the active page only -- every page is visible at once
+        # now, so an unscoped list would mix unrelated pages' contents.
         # Grouped children are reachable only through their group -- listing
         # them separately would duplicate the group's contents as top-level rows.
-        items = [i for i in scene.items() if i != page_frame and i.parentItem() is None]
+        items = [
+            i for i in scene.items()
+            if i not in frames and i.parentItem() is None and page_for_item(scene.pages, i) is active_page
+        ]
         items.sort(key=lambda i: i.zValue(), reverse=True)
         return items
 

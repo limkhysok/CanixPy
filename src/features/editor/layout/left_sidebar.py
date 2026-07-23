@@ -238,8 +238,11 @@ class LeftSidebar(QWidget):
     def add_text_preset(self, text: str, size: int, bold: bool) -> None:
         font = QFont("Arial", size)
         font.setBold(bold)
-        # Same drop point the Upload page centers images on.
-        center_point = QPointF(400, 300)
+        # Center of the active page -- not a fixed scene point, since with
+        # multiple pages stacked in one scrollable canvas that could land
+        # the item on whichever page happens to sit at that coordinate.
+        page = self.main_app.active_page
+        center_point = QPointF(page.width / 2, page.y_offset + page.height / 2)
         self.main_app.scene.add_text_item(text, center_point, font)
 
     def _build_upload_page(self) -> QWidget:
@@ -263,6 +266,7 @@ class LeftSidebar(QWidget):
             IMPORT_FILE_FILTER,
         )
         if file_path:
-            # Spawn the image right in the middle of the current canvas frame
-            center_point = QPointF(400, 300)
+            # Center of the active page -- see add_text_preset's comment.
+            active_page = self.main_app.active_page
+            center_point = QPointF(active_page.width / 2, active_page.y_offset + active_page.height / 2)
             self.main_app.scene.add_image_item(file_path, center_point)

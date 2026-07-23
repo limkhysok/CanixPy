@@ -56,12 +56,3 @@ QToolButton#exportButton::menu-indicator {
     right: 8px;
     width: 12px;
 }
-QToolButton#pageMenuButton {
-    background-color: $BACKGROUND;
-    border: 1px solid $BORDER;
-    border-radius: 6px;
-    padding: 6px 10px;
-}
-QToolButton#pageMenuButton:hover {
-    background-color: $SURFACE;
-}
