@@ -25,7 +25,7 @@ from src.features.editor.canvas.items import ResizablePolygonItem, get_layer_nam
 from src.features.editor.canvas.page import page_for_item
 
 if TYPE_CHECKING:
-    from src.features.editor.editor_view import CoreDesignApp
+    from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
 
 _TYPE_ICONS: list[tuple[type[QGraphicsItem], str]] = [
     (QGraphicsItemGroup, "fa5s.object-group"),
@@ -191,9 +191,9 @@ class LayersPanel(QWidget):
     """Lists items on the current page, front-most first, and keeps the
     canvas selection in sync in both directions."""
 
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    def __init__(self, viewmodel: "EditorViewModel", parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.main_app = main_app
+        self.viewmodel = viewmodel
         self.setStyleSheet(LAYERS_PANEL_STYLE)
         self._rows: dict[QGraphicsItem, LayerRow] = {}
 
@@ -220,9 +220,9 @@ class LayersPanel(QWidget):
         layout.addWidget(self.empty_hint)
 
     def _items_front_to_back(self) -> list[QGraphicsItem]:
-        scene = self.main_app.scene
+        scene = self.viewmodel.scene
         frames = scene.page_frames()
-        active_page = self.main_app.active_page
+        active_page = self.viewmodel.active_page
         # Scoped to the active page only -- every page is visible at once
         # now, so an unscoped list would mix unrelated pages' contents.
         # Grouped children are reachable only through their group -- listing
@@ -254,7 +254,7 @@ class LayersPanel(QWidget):
         self.empty_hint.setVisible(not items)
 
     def sync_selection(self) -> None:
-        selected = set(self.main_app.scene.selectedItems())
+        selected = set(self.viewmodel.scene.selectedItems())
         for item, row in self._rows.items():
             row.set_selected(item in selected)
 
@@ -264,5 +264,5 @@ class LayersPanel(QWidget):
         if toggle:
             item.setSelected(not item.isSelected())
         else:
-            self.main_app.scene.clearSelection()
+            self.viewmodel.scene.clearSelection()
             item.setSelected(True)

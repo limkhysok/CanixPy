@@ -51,7 +51,7 @@ from src.features.editor.canvas.page import page_for_item
 if TYPE_CHECKING:
     from src.features.editor.canvas.page import Page
     from src.features.editor.canvas.scene import DesignScene
-    from src.features.editor.editor_view import CoreDesignApp
+    from src.features.editor.views.editor_view import EditorView
 
 PROJECT_FORMAT_VERSION = 2
 
@@ -279,11 +279,12 @@ def deserialize_item(data: dict[str, Any]) -> QGraphicsItem | None:
 
 
 def serialize_page_items(scene: "DesignScene", page: "Page") -> list[dict[str, Any]]:
-    """Top-level items belonging to `page` (see page_for_item), with y
+    """Top-level items belonging to `page` (see page_for_item), with x/y
     stored *relative to the page's own origin* -- decouples the saved
-    format from whatever PAGE_GAP happens to be in effect at load time, and
-    keeps each page's entry self-contained. Group children are untouched
-    (already relative to their parent group, not the page)."""
+    format from wherever the page happens to be positioned (or whatever
+    PAGE_GAP was in effect) at load time, and keeps each page's entry
+    self-contained. Group children are untouched (already relative to their
+    parent group, not the page)."""
     frames = scene.page_frames()
     result: list[dict[str, Any]] = []
     for item in scene.items():
@@ -297,21 +298,22 @@ def serialize_page_items(scene: "DesignScene", page: "Page") -> list[dict[str, A
         data = serialize_item(item)
         if data is not None:
             data = dict(data)
+            data["x"] -= page.x_offset
             data["y"] -= page.y_offset
             result.append(data)
     return result
 
 
 def deserialize_page_items(items_data: list[dict[str, Any]], page: "Page") -> list[QGraphicsItem]:
-    """Inverse of serialize_page_items's y-offset step: builds items via the
-    generic deserialize_item() (which knows nothing about pages, and is also
-    reused by plain copy/paste/duplicate-item, so it must stay page-agnostic)
-    then shifts each into `page`'s absolute scene position."""
+    """Inverse of serialize_page_items's x/y-offset step: builds items via
+    the generic deserialize_item() (which knows nothing about pages, and is
+    also reused by plain copy/paste/duplicate-item, so it must stay
+    page-agnostic) then shifts each into `page`'s absolute scene position."""
     items: list[QGraphicsItem] = []
     for item_data in items_data:
         item = deserialize_item(item_data)
         if item is not None:
-            item.setPos(item.pos().x(), item.pos().y() + page.y_offset)
+            item.setPos(item.pos().x() + page.x_offset, item.pos().y() + page.y_offset)
             items.append(item)
     return items
 
@@ -324,6 +326,10 @@ def serialize_page_entry(scene: "DesignScene", page: "Page") -> dict[str, Any]:
         "items": serialize_page_items(scene, page),
         "width": page.width,
         "height": page.height,
+        # Pages are freely positioned (not auto-stacked), so this is real,
+        # meaningful state now, not something reconstructible from order.
+        "x": page.x_offset,
+        "y": page.y_offset,
     }
     if page.name:
         entry["name"] = page.name
@@ -332,7 +338,7 @@ def serialize_page_entry(scene: "DesignScene", page: "Page") -> dict[str, Any]:
     return entry
 
 
-def serialize_project(app: "CoreDesignApp") -> dict[str, Any]:
+def serialize_project(app: "EditorView") -> dict[str, Any]:
     return {
         "format_version": PROJECT_FORMAT_VERSION,
         "canvas_size": list(app.canvas_size),
@@ -342,7 +348,7 @@ def serialize_project(app: "CoreDesignApp") -> dict[str, Any]:
     }
 
 
-def save_project(app: "CoreDesignApp", file_path: str) -> None:
+def save_project(app: "EditorView", file_path: str) -> None:
     with open(file_path, "w", encoding="utf-8") as handle:
         json.dump(serialize_project(app), handle)
 

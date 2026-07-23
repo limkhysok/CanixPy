@@ -1,21 +1,29 @@
-"""One page within a DesignScene's stacked multi-page document.
+"""One page within a DesignScene's multi-page document. Pages are freely
+positioned (drag them on the canvas -- see PageFrameItem in canvas/items.py),
+not auto-stacked.
 
-`Page` deliberately doesn't store width/height/y_offset/background_color as
-independent fields -- it reads through to its own QGraphicsRectItem frame,
-so there's exactly one source of truth for a page's geometry (the frame
-itself) instead of two that could drift apart.
+`Page` deliberately doesn't store width/height/x_offset/y_offset/
+background_color as independent fields -- it reads through to its own
+QGraphicsRectItem frame, so there's exactly one source of truth for a page's
+geometry (the frame itself) instead of two that could drift apart.
 """
 from __future__ import annotations
 
+import math
 from typing import Iterable
 
 from PySide6.QtCore import QRectF
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem
 
-# Scene units between stacked pages -- visual breathing room so adjacent
-# pages read as separate sheets, not one continuous surface.
+# Scene units below the previous page a freshly added/duplicated page starts
+# at -- just an initial placement, not an enforced invariant; pages are
+# freely draggable afterward.
 PAGE_GAP = 80
+
+# Smallest a page can be resized to, whether typed into the Properties panel's
+# W/H boxes or dragged via PageFrameItem's resize handles (see canvas/items.py).
+PAGE_MIN_SIZE = 100
 
 
 class Page:
@@ -32,6 +40,10 @@ class Page:
         return self.frame.rect().height()
 
     @property
+    def x_offset(self) -> float:
+        return self.frame.pos().x()
+
+    @property
     def y_offset(self) -> float:
         return self.frame.pos().y()
 
@@ -45,26 +57,26 @@ class Page:
     def set_background_color(self, color: QColor) -> None:
         self.frame.setBrush(QBrush(color))
 
-    def set_y_offset(self, y: float) -> None:
-        self.frame.setPos(0, y)
-
     def rect(self) -> QRectF:
         """This page's bounds in scene coordinates."""
-        return QRectF(0, self.y_offset, self.width, self.height)
+        return QRectF(self.x_offset, self.y_offset, self.width, self.height)
 
 
 def page_for_item(pages: list[Page], item: QGraphicsItem) -> Page:
     """Which page an item "belongs to" -- derived from its current position,
     never stored, since items can legitimately be dragged from one page's
-    region into another's. Falls back to the nearest page by edge distance
-    when the item's center sits in the gap between pages."""
-    y = item.sceneBoundingRect().center().y()
+    region into another's (or into the gap between freely-positioned pages).
+    Falls back to the nearest page by 2D distance-to-rect when the item's
+    center isn't actually inside any page."""
+    center = item.sceneBoundingRect().center()
 
     def distance(page: Page) -> float:
-        top, bottom = page.y_offset, page.y_offset + page.height
-        if top <= y <= bottom:
+        rect = page.rect()
+        if rect.contains(center):
             return 0.0
-        return min(abs(y - top), abs(y - bottom))
+        dx = max(rect.left() - center.x(), 0.0, center.x() - rect.right())
+        dy = max(rect.top() - center.y(), 0.0, center.y() - rect.bottom())
+        return math.hypot(dx, dy)
 
     return min(pages, key=distance)
 

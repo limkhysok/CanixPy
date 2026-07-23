@@ -18,10 +18,10 @@ from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
 from PySide6.QtGui import QDrag, QFont
 from src.core import icons, theme
 from src.core.image_loader import IMPORT_FILE_FILTER
-from src.features.editor.layout.layers_panel import LayersPanel
+from src.features.editor.views.layout.layers_panel import LayersPanel
 
 if TYPE_CHECKING:
-    from src.features.editor.editor_view import CoreDesignApp
+    from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
 
 LEFT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("left_sidebar.qss"))
 
@@ -146,9 +146,9 @@ class NavRailButton(QToolButton):
 
 # Wrap the nav rail and the swappable content panel into a clean Sidebar Widget
 class LeftSidebar(QWidget):
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    def __init__(self, viewmodel: "EditorViewModel", parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.main_app = main_app
+        self.viewmodel = viewmodel
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(LEFT_SIDEBAR_STYLE)
 
@@ -215,7 +215,7 @@ class LeftSidebar(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
         layout.addWidget(_section_header("Layers"))
-        self.layers_panel = LayersPanel(self.main_app)
+        self.layers_panel = LayersPanel(self.viewmodel)
         layout.addWidget(self.layers_panel, 1)
         return page
 
@@ -241,9 +241,9 @@ class LeftSidebar(QWidget):
         # Center of the active page -- not a fixed scene point, since with
         # multiple pages stacked in one scrollable canvas that could land
         # the item on whichever page happens to sit at that coordinate.
-        page = self.main_app.active_page
-        center_point = QPointF(page.width / 2, page.y_offset + page.height / 2)
-        self.main_app.scene.add_text_item(text, center_point, font)
+        page = self.viewmodel.active_page
+        center_point = QPointF(page.x_offset + page.width / 2, page.y_offset + page.height / 2)
+        self.viewmodel.scene.add_text_item(text, center_point, font)
 
     def _build_upload_page(self) -> QWidget:
         page = QWidget()
@@ -267,6 +267,8 @@ class LeftSidebar(QWidget):
         )
         if file_path:
             # Center of the active page -- see add_text_preset's comment.
-            active_page = self.main_app.active_page
-            center_point = QPointF(active_page.width / 2, active_page.y_offset + active_page.height / 2)
-            self.main_app.scene.add_image_item(file_path, center_point)
+            active_page = self.viewmodel.active_page
+            center_point = QPointF(
+                active_page.x_offset + active_page.width / 2, active_page.y_offset + active_page.height / 2
+            )
+            self.viewmodel.scene.add_image_item(file_path, center_point)

@@ -6,17 +6,15 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QFileDialog, QGraphicsItem, QHBoxLayout, QMainWindow, QVBoxLayout, QWidget
 from src.features.editor import persistence
 from src.features.editor.canvas.page import Page, page_for_item
-from src.features.editor.canvas.scene import DesignScene
 from src.features.editor.canvas.view import ZoomableGraphicsView
-from src.features.editor.layout.left_sidebar import LeftSidebar
-from src.features.editor.layout.page_overlay import PageOverlayManager
-from src.features.editor.layout.right_sidebar import PropertiesPanel
-from src.features.editor.layout.top_navbar import TopNavbar
+from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
+from src.features.editor.views.layout.left_sidebar import LeftSidebar
+from src.features.editor.views.layout.page_overlay import PageOverlayManager
+from src.features.editor.views.layout.right_sidebar import PropertiesPanel
+from src.features.editor.views.layout.top_navbar import TopNavbar
 from src.features.editor.exporter import export_scene_to_jpg, export_scene_to_pdf, export_scene_to_png
 
-PASTE_OFFSET = 20
-
-class CoreDesignApp(QMainWindow):
+class EditorView(QMainWindow):
     back_to_home = Signal()
 
     def __init__(self, canvas_size: tuple[int, int] = (800, 600)) -> None:
@@ -24,15 +22,19 @@ class CoreDesignApp(QMainWindow):
         self.setWindowTitle("Native Python Design Studio v3")
         self.setGeometry(100, 100, 1300, 800)
 
-        self.canvas_size = canvas_size
-        # Index into self.scene.pages -- the page most recently interacted
-        # with (clicked, selected an item on, scrolled to center on), used by
-        # Export and the Properties panel's page-inspect view, both of which
-        # need exactly one page in context even though every page is visible
-        # at once. See set_active_page().
-        self.active_page_index: int = 0
         self._active_properties_page: Page | None = None
-        self._clipboard: list[dict[str, Any]] = []
+        # Document state (scene/pages, active page, clipboard, undo/redo)
+        # lives on the viewmodel -- see EditorViewModel. `self.scene` stays
+        # as a direct alias since every panel under views/layout/ still
+        # reads it that way.
+        self.viewmodel = EditorViewModel(
+            canvas_size,
+            on_refresh=self.refresh_editor_panels,
+            on_properties_change=self.update_properties_panel,
+            on_history_change=self.update_history_buttons,
+        )
+        self.scene = self.viewmodel.scene
+        self.scene.selectionChanged.connect(self.sync_editor_selection)
 
         self.init_ui()
         self.init_shortcuts()
@@ -59,25 +61,45 @@ class CoreDesignApp(QMainWindow):
         content_layout.setSpacing(0)
 
         # --- TOP NAVBAR ---
-        self.top_navbar = TopNavbar(self)
+        # Doesn't take the viewmodel -- it has no state of its own to read,
+        # just buttons that emit signals for this composition root to wire up.
+        self.top_navbar = TopNavbar()
         self.top_navbar.back_clicked.connect(self.back_to_home.emit)
+        self.top_navbar.undo_clicked.connect(self.undo)
+        self.top_navbar.redo_clicked.connect(self.redo)
+        self.top_navbar.export_png_clicked.connect(self.export_page_to_png)
+        self.top_navbar.export_png_transparent_clicked.connect(self.export_page_to_png_transparent)
+        self.top_navbar.export_jpg_clicked.connect(self.export_page_to_jpg)
+        self.top_navbar.export_pdf_clicked.connect(self.export_page_to_pdf)
 
         # --- PANEL SYSTEM SETUP ---
-        self.left_panel = LeftSidebar(self)
-        self.properties_panel = PropertiesPanel(self)
+        self.left_panel = LeftSidebar(self.viewmodel)
+        self.properties_panel = PropertiesPanel(self.viewmodel)
 
         # --- CANVAS SETUP ---
-        # One shared scene for the whole document -- pages are stacked
-        # regions within it (see DesignScene.add_page), not separate scenes
-        # swapped in and out.
-        self.scene = DesignScene(self)
-        self.scene.add_page(*self.canvas_size)
-        self.view = ZoomableGraphicsView(self.scene, self)
+        self.view = ZoomableGraphicsView(
+            self.scene,
+            self.viewmodel,
+            on_refresh=self.refresh_editor_panels,
+            on_properties_change=self.update_properties_panel,
+            on_selection_sync=self.sync_editor_selection,
+            on_page_properties_shown=self.show_page_properties,
+            on_page_properties_cleared=self.clear_page_properties,
+        )
 
         # Per-page floating labels (name/rename/duplicate/delete/move) + a
         # trailing Add Page button, parented onto the viewport and
         # repositioned every repaint -- see ZoomableGraphicsView.paintEvent.
-        self.page_overlay_manager = PageOverlayManager(self, self.view.viewport())
+        self.page_overlay_manager = PageOverlayManager(
+            self.viewmodel,
+            self.view.viewport(),
+            on_add=self.add_new_page,
+            on_duplicate=self.duplicate_page,
+            on_delete=self.delete_page,
+            on_move=self.move_page,
+            on_rename=self.rename_page,
+            on_active_page_changed=self.set_active_page,
+        )
         self.page_overlay_manager.rebuild()
         self.view.page_overlay_manager = self.page_overlay_manager
 
@@ -96,25 +118,18 @@ class CoreDesignApp(QMainWindow):
     def zoom_out(self) -> None: self.view.scale(0.8, 0.8)
     def zoom_reset(self) -> None: self.view.fit_to_page(self.active_page)
 
-    # --- ACTIVE PAGE ---------------------------------------------------
+    # --- ACTIVE PAGE / CANVAS SIZE ---------------------------------------
+    @property
+    def canvas_size(self) -> tuple[int, int]:
+        return self.viewmodel.canvas_size
+
     @property
     def active_page(self) -> Page:
-        index = min(self.active_page_index, len(self.scene.pages) - 1)
-        return self.scene.pages[index]
+        return self.viewmodel.active_page
 
     def set_active_page(self, page: Page) -> None:
-        try:
-            index = self.scene.pages.index(page)
-        except ValueError:
-            return
-        changed = index != self.active_page_index
-        self.active_page_index = index
-        if changed:
+        if self.viewmodel.set_active_page(page):
             self.left_panel.layers_panel.refresh()
-
-    def _page_label(self, page: Page) -> str:
-        index = self.scene.pages.index(page)
-        return page.name or f"Page {index + 1}"
 
     def _sync_active_page_from_selection(self) -> None:
         selected = self.scene.selectedItems()
@@ -123,24 +138,14 @@ class CoreDesignApp(QMainWindow):
 
     # --- PAGE CRUD -------------------------------------------------------
     def add_new_page(self) -> None:
-        page = self.scene.add_page(*self.canvas_size)
+        page = self.viewmodel.add_new_page()
         self.page_overlay_manager.rebuild()
         self.set_active_page(page)
         self.view.scroll_to_page(page)
         self.refresh_editor_panels()
 
     def duplicate_page(self, source: Page) -> None:
-        new_page = self.scene.insert_page_after(
-            source, int(source.width), int(source.height), source.background_color
-        )
-        items_data = persistence.serialize_page_items(self.scene, source)
-        # No undo entry -- page-level actions (add/delete/duplicate/move)
-        # aren't undoable at all yet (a pre-existing gap, not new here), and
-        # add_items_with_undo would leave a half-broken entry that removes
-        # the duplicated items but not the duplicated page frame itself.
-        self.scene.add_items(persistence.deserialize_page_items(items_data, new_page))
-        new_page.name = f"{self._page_label(source)} Copy"
-
+        new_page = self.viewmodel.duplicate_page(source)
         self.page_overlay_manager.rebuild()
         self.set_active_page(new_page)
         self.view.scroll_to_page(new_page)
@@ -150,27 +155,24 @@ class CoreDesignApp(QMainWindow):
         if len(self.scene.pages) <= 1:
             return  # always keep at least one page
         was_active = page is self.active_page
-        self.scene.delete_page(page)
+        self.viewmodel.delete_page(page)
         self.page_overlay_manager.rebuild()
         if was_active:
-            new_index = min(self.active_page_index, len(self.scene.pages) - 1)
-            self.set_active_page(self.scene.pages[new_index])
+            self.set_active_page(self.active_page)
         self.refresh_editor_panels()
 
     def move_page(self, page: Page, delta: int) -> None:
-        self.scene.move_page(page, delta)
+        self.viewmodel.move_page(page, delta)
         self.page_overlay_manager.rebuild()
         self.refresh_editor_panels()
 
     def rename_page(self, page: Page, name: str) -> None:
-        name = name.strip()
-        index = self.scene.pages.index(page)
-        default_name = f"Page {index + 1}"
-        page.name = name if name and name != default_name else None
+        self.viewmodel.rename_page(page, name)
 
     def update_properties_panel(self) -> None:
         selected = self.scene.selectedItems()
         if selected:
+            self._set_page_resize_handles(None)
             self._active_properties_page = None
             self.properties_panel.inspect_selection(selected)
         elif self._active_properties_page is not None:
@@ -179,13 +181,24 @@ class CoreDesignApp(QMainWindow):
             self.properties_panel.inspect_selection([])
 
     def show_page_properties(self, page: Page) -> None:
+        self._set_page_resize_handles(page)
         self._active_properties_page = page
         self.set_active_page(page)
         self.update_properties_panel()
 
     def clear_page_properties(self) -> None:
+        self._set_page_resize_handles(None)
         self._active_properties_page = None
         self.update_properties_panel()
+
+    def _set_page_resize_handles(self, page: Page | None) -> None:
+        """On-canvas resize handles (PageFrameItem) track which page's
+        inspector is open, not Qt selection -- page frames are never made
+        ItemIsSelectable (see DesignScene._create_frame)."""
+        if self._active_properties_page is not None and self._active_properties_page is not page:
+            self._active_properties_page.frame.set_active_for_resize(False)
+        if page is not None:
+            page.frame.set_active_for_resize(True)
 
     def refresh_editor_panels(self) -> None:
         """Full rebuild: call after anything that adds/removes/reorders items."""
@@ -208,51 +221,28 @@ class CoreDesignApp(QMainWindow):
         self.top_navbar.set_history_enabled(self.scene.undo_stack.can_undo(), self.scene.undo_stack.can_redo())
 
     def undo(self) -> None:
-        self.scene.undo_stack.undo()
+        self.viewmodel.undo()
         self.refresh_editor_panels()
 
     def redo(self) -> None:
-        self.scene.undo_stack.redo()
+        self.viewmodel.redo()
         self.refresh_editor_panels()
 
     # --- CLIPBOARD (copy / paste / duplicate) ---
     def copy_selection(self) -> None:
-        frames = self.scene.page_frames()
-        items = [i for i in self.scene.selectedItems() if i not in frames]
-        self._clipboard = [d for i in items if (d := persistence.serialize_item(i)) is not None]
+        self.viewmodel.copy_selection()
 
     def paste_clipboard(self) -> None:
-        self._paste_data(self._clipboard)
+        self.viewmodel.paste_clipboard()
 
     def duplicate_selection(self) -> None:
-        frames = self.scene.page_frames()
-        items = [i for i in self.scene.selectedItems() if i not in frames]
-        self.duplicate_items(items)
+        self.viewmodel.duplicate_selection()
 
     def duplicate_items(self, items: list[QGraphicsItem]) -> None:
         """Duplicate specific items regardless of current selection -- e.g.
         an image's right-click "Duplicate" should act on that image even if
         it's locked (and so can't actually be selected)."""
-        data = [d for i in items if (d := persistence.serialize_item(i)) is not None]
-        self._paste_data(data)
-
-    def _paste_data(self, data: list[dict[str, Any]]) -> None:
-        if not data:
-            return
-        new_items: list[QGraphicsItem] = []
-        for item_data in data:
-            offset_data = dict(item_data)
-            offset_data["x"] = item_data["x"] + PASTE_OFFSET
-            offset_data["y"] = item_data["y"] + PASTE_OFFSET
-            item = persistence.deserialize_item(offset_data)
-            if item:
-                new_items.append(item)
-        if not new_items:
-            return
-        self.scene.clearSelection()
-        self.scene.add_items_with_undo(new_items)
-        for item in new_items:
-            item.setSelected(True)
+        self.viewmodel.duplicate_items(items)
 
     # --- SAVE / LOAD PROJECT ---
     def save_project(self) -> None:
@@ -276,25 +266,10 @@ class CoreDesignApp(QMainWindow):
         """Replace the whole document with a previously-serialized project
         (see persistence.serialize_project). Used both by File > Open and by
         the Home screen restoring a task's saved editor content."""
-        canvas_size = data.get("canvas_size")
-        if canvas_size and len(canvas_size) == 2:
-            self.canvas_size = (int(canvas_size[0]), int(canvas_size[1]))
-
         self._active_properties_page = None
-        self.active_page_index = 0
-
-        new_scene = DesignScene(self)
-        pages_data: list[dict[str, Any]] = data.get("pages", [])
-        for page_entry in pages_data:
-            width = int(page_entry.get("width", self.canvas_size[0]))
-            height = int(page_entry.get("height", self.canvas_size[1]))
-            background_color = page_entry.get("background_color", "#ffffff")
-            page = new_scene.add_page(width, height, background_color, page_entry.get("name"))
-            new_scene.add_items(persistence.deserialize_page_items(page_entry.get("items", []), page))
-        if not new_scene.pages:
-            new_scene.add_page(*self.canvas_size)
-
-        self.scene = new_scene
+        self.viewmodel.apply_project_data(data)
+        self.scene = self.viewmodel.scene
+        self.scene.selectionChanged.connect(self.sync_editor_selection)
         self.view.setScene(self.scene)
         self.page_overlay_manager.rebuild()
         self.view.request_fit_to_page(self.scene.pages[0])
@@ -303,18 +278,20 @@ class CoreDesignApp(QMainWindow):
 
     # --- EXPORT ---
     def export_page_to_png(self) -> None:
-        self._export(f"design_page_{self.active_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png)
+        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png)
 
     def export_page_to_png_transparent(self) -> None:
         self._export(
-            f"design_page_{self.active_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png_transparent
+            f"design_page_{self.viewmodel.active_page_index + 1}.png",
+            "PNG Image (*.png)",
+            self._do_export_png_transparent,
         )
 
     def export_page_to_jpg(self) -> None:
-        self._export(f"design_page_{self.active_page_index + 1}.jpg", "JPG Image (*.jpg)", self._do_export_jpg)
+        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.jpg", "JPG Image (*.jpg)", self._do_export_jpg)
 
     def export_page_to_pdf(self) -> None:
-        self._export(f"design_page_{self.active_page_index + 1}.pdf", "PDF Document (*.pdf)", self._do_export_pdf)
+        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.pdf", "PDF Document (*.pdf)", self._do_export_pdf)
 
     def _export(self, default_name: str, file_filter: str, do_export: Callable[[str, Page], None]) -> None:
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Page", default_name, file_filter)

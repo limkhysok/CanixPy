@@ -29,9 +29,11 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import theme
+from src.features.editor.canvas.page import PAGE_MIN_SIZE
 from src.features.editor.canvas.snapping import SNAP_THRESHOLD_PX, compute_snap
 
 if TYPE_CHECKING:
+    from src.features.editor.canvas.page import Page
     from src.features.editor.canvas.scene import DesignScene
 
 # Handle/rotate sizes below are target *screen* pixels, not local/scene units --
@@ -117,6 +119,9 @@ class _HandleMixin(_HandleMixinBase):
     """
 
     RESIZE_HANDLES: tuple[str, ...] = _ALL_HANDLES
+    # Set False to omit the rotate handle entirely -- used by PageFrameItem,
+    # for which rotation doesn't make sense.
+    ROTATABLE: bool = True
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[call-arg]
@@ -175,6 +180,15 @@ class _HandleMixin(_HandleMixinBase):
         exactly match the locked aspect ratio."""
         return rect
 
+    def _handles_visible(self) -> bool:
+        """Whether resize (and rotate, if ROTATABLE) handles currently show
+        and hit-test. Default: Qt's own selection state, matching every
+        existing item. Overridden by PageFrameItem, whose handles track
+        which page's Properties-panel inspector is open instead -- page
+        frames are deliberately never made ItemIsSelectable (see
+        DesignScene._create_frame's docstring)."""
+        return self.isSelected()
+
     def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
         # Fixed worst-case margin -- see _MAX_LOCAL_HANDLE_HIT/_MAX_LOCAL_ROTATE_REACH.
         pad = _MAX_LOCAL_HANDLE_HIT + _MAX_LOCAL_ROTATE_REACH
@@ -192,13 +206,14 @@ class _HandleMixin(_HandleMixinBase):
         # cancelling out into a "hole" under odd-even parity.
         path.setFillRule(Qt.FillRule.WindingFill)
         path.addRect(self.local_rect())
-        if self.isSelected():
+        if self._handles_visible():
             hit = self._handle_hit_size()
             for pos in self._handle_positions().values():
                 path.addRect(QRectF(pos.x() - hit / 2, pos.y() - hit / 2, hit, hit))
-            rp = self._rotate_handle_pos()
-            rot_hit = self._rotate_hit_size()
-            path.addEllipse(rp, rot_hit / 2, rot_hit / 2)
+            if self.ROTATABLE:
+                rp = self._rotate_handle_pos()
+                rot_hit = self._rotate_hit_size()
+                path.addEllipse(rp, rot_hit / 2, rot_hit / 2)
         return path
 
     # -- device-scale-independent sizing -----------------------------------
@@ -250,9 +265,10 @@ class _HandleMixin(_HandleMixinBase):
         for name, pos in self._handle_positions().items():
             if abs(local_pos.x() - pos.x()) <= half and abs(local_pos.y() - pos.y()) <= half:
                 return name
-        rp = self._rotate_handle_pos()
-        if (local_pos - rp).manhattanLength() <= self._rotate_hit_size():
-            return "rotate"
+        if self.ROTATABLE:
+            rp = self._rotate_handle_pos()
+            if (local_pos - rp).manhattanLength() <= self._rotate_hit_size():
+                return "rotate"
         return None
 
     # -- painting ---------------------------------------------------------
@@ -268,7 +284,7 @@ class _HandleMixin(_HandleMixinBase):
         return stripped
 
     def _paint_handles(self, painter: QPainter) -> None:
-        if not self.isSelected():
+        if not self._handles_visible():
             return
         pen = QPen(QColor(theme.ACCENT))
         pen.setWidth(0)
@@ -276,23 +292,24 @@ class _HandleMixin(_HandleMixinBase):
         painter.setBrush(QColor("#ffffff"))
 
         r = self.local_rect()
-        rp = self._rotate_handle_pos()
-        painter.drawLine(QPointF(r.center().x(), r.top()), rp)
         handle_size = self._handle_visual_size()
-        painter.drawEllipse(rp, handle_size / 2, handle_size / 2)
+        if self.ROTATABLE:
+            rp = self._rotate_handle_pos()
+            painter.drawLine(QPointF(r.center().x(), r.top()), rp)
+            painter.drawEllipse(rp, handle_size / 2, handle_size / 2)
 
         for pos in self._handle_positions().values():
             painter.drawRect(QRectF(pos.x() - handle_size / 2, pos.y() - handle_size / 2, handle_size, handle_size))
 
     # -- hover / cursor -----------------------------------------------------
     def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802
-        handle = self._handle_at(event.pos()) if self.isSelected() else None
+        handle = self._handle_at(event.pos()) if self._handles_visible() else None
         self.setCursor(QCursor(_CURSOR_FOR_HANDLE[handle]) if handle else QCursor())
         super().hoverMoveEvent(event)
 
     # -- mouse: resize / rotate, falling back to normal move/select -----
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
-        if self.isSelected():
+        if self._handles_visible():
             handle = self._handle_at(event.pos())
             if handle == "rotate":
                 self._rotating = True
@@ -405,7 +422,7 @@ class _HandleMixin(_HandleMixinBase):
         # rotate gesture actually finishes instead.
         scene = self._typed_scene()
         if scene is not None:
-            scene.main_app.update_properties_panel()
+            scene.notify_properties_change()
 
     # -- typed size entry (Properties panel W/H fields) --------------------
     def set_size(self, width: float, height: float) -> None:
@@ -684,6 +701,103 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
         # See ResizablePixmapItem.paint -- QGraphicsTextItem's stub has the
         # same Optional-less `widget` mismatch against the real base contract.
         super().paint(painter, self._unselected_option(option), cast(QWidget, widget))
+        self._paint_handles(painter)
+
+
+class PageFrameItem(_HandleMixin, QGraphicsRectItem):
+    """A page's background frame -- freely draggable, resizable from all 4
+    corners, never rotatable. Movable (ItemIsMovable) but deliberately never
+    selectable (ItemIsSelectable) -- page frames must never show up in
+    scene.selectedItems(), which the Properties panel/copy-paste/Layers panel
+    all assume (see DesignScene._create_frame). Resize handles show while
+    this page's Properties-panel inspector is open instead of on Qt
+    selection (see set_active_for_resize/_handles_visible,
+    EditorView._set_page_resize_handles).
+
+    Resize works in scene space (not local), because -- unlike the shape
+    items above -- the dragged corner can genuinely move the page's position:
+    Page.set_size() always resets the local rect back to (0, 0, w, h), so
+    _apply_resize() below applies any position change via setPos() and the
+    size via DesignScene.resize_page() separately.
+    """
+
+    RESIZE_HANDLES = _CORNER_HANDLES
+    ROTATABLE = False
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.page: "Page | None" = None
+        self._active_for_resize = False
+        self._drag_start_pos: QPointF | None = None
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+
+    def local_rect(self) -> QRectF:
+        return self.rect()
+
+    def _resize_reference_rect(self) -> QRectF:
+        return self.mapRectToScene(self.local_rect())
+
+    def _resize_delta(self, event: QGraphicsSceneMouseEvent) -> QPointF:
+        assert self._resize_start_scene_pos is not None
+        return event.scenePos() - self._resize_start_scene_pos
+
+    def _resize_target_rect(self, rect: QRectF) -> QRectF:
+        # Re-clamp to PAGE_MIN_SIZE (stricter than the generic MIN_SIZE
+        # _resized_rect() already clamped to) while preserving whichever
+        # corner is the actual drag anchor -- the edges the active handle
+        # doesn't touch must stay put.
+        handle = self._active_handle or ""
+        width = max(rect.width(), PAGE_MIN_SIZE)
+        height = max(rect.height(), PAGE_MIN_SIZE)
+        left = rect.right() - width if "l" in handle else rect.left()
+        top = rect.bottom() - height if "t" in handle else rect.top()
+        return QRectF(left, top, width, height)
+
+    def _apply_resize(self, rect: QRectF) -> None:
+        scene = self._typed_scene()
+        if scene is None or self.page is None:
+            return
+        self.setPos(rect.topLeft())
+        scene.resize_page(self.page, rect.width(), rect.height())
+
+    def _handles_visible(self) -> bool:
+        return self._active_for_resize
+
+    def set_active_for_resize(self, active: bool) -> None:
+        if self._active_for_resize != active:
+            self._active_for_resize = active
+            self.update()
+
+    # -- plain drag-to-move (falls through from _HandleMixin.mousePressEvent
+    # when the press isn't on a handle) -- tracked and pushed to undo here
+    # rather than via canvas/view.py's usual per-selection drag tracking,
+    # since page frames are deliberately never part of scene.selectedItems().
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        super().mousePressEvent(event)
+        if self._active_handle is None:
+            self._drag_start_pos = self.pos()
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        super().mouseReleaseEvent(event)
+        start = self._drag_start_pos
+        self._drag_start_pos = None
+        if start is None or start == self.pos():
+            return
+        old_pos, new_pos = start, self.pos()
+
+        def _move_to(pos: QPointF) -> None:
+            self.setPos(pos)
+            scene = self._typed_scene()
+            if scene is not None:
+                scene.update_scene_rect()
+
+        self._push_undo(lambda: _move_to(old_pos), lambda: _move_to(new_pos))
+        scene = self._typed_scene()
+        if scene is not None:
+            scene.update_scene_rect()
+
+    def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
+        super().paint(painter, self._unselected_option(option), widget)
         self._paint_handles(painter)
 
 

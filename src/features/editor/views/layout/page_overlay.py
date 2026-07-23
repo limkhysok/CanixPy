@@ -10,9 +10,9 @@ between.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
-from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QMouseEvent
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
@@ -29,7 +29,7 @@ from src.features.editor.canvas.page import Page
 
 if TYPE_CHECKING:
     from src.features.editor.canvas.view import ZoomableGraphicsView
-    from src.features.editor.editor_view import CoreDesignApp
+    from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
 
 PAGE_OVERLAY_STYLE = theme.load_qss(Path(__file__).with_name("page_overlay.qss"))
 
@@ -53,11 +53,18 @@ def _make_shadow() -> QGraphicsDropShadowEffect:
 class PageLabel(QWidget):
     """Floating pill under one page: name (double-click to rename inline) +
     a "..." menu (Duplicate/Delete/Move Up/Move Down) acting on that exact
-    Page -- no ambiguous "current page" involved."""
+    Page -- no ambiguous "current page" involved. Only reads document state
+    (via `viewmodel`); actions are requested via signals so PageOverlayManager
+    (and ultimately EditorView) decides how to react."""
 
-    def __init__(self, main_app: "CoreDesignApp", page: Page, parent: QWidget | None = None) -> None:
+    duplicate_requested = Signal(object)  # Page
+    delete_requested = Signal(object)  # Page
+    move_requested = Signal(object, int)  # Page, delta
+    rename_requested = Signal(object, str)  # Page, new name
+
+    def __init__(self, viewmodel: "EditorViewModel", page: Page, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.main_app = main_app
+        self.viewmodel = viewmodel
         self.page = page
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(PAGE_OVERLAY_STYLE)
@@ -87,13 +94,13 @@ class PageLabel(QWidget):
 
         menu = QMenu(btn_menu)
         duplicate_action = QAction(icons.icon("fa5s.clone"), "Duplicate Page", menu)
-        duplicate_action.triggered.connect(lambda: main_app.duplicate_page(self.page))
+        duplicate_action.triggered.connect(lambda: self.duplicate_requested.emit(self.page))
         delete_action = QAction(icons.icon("fa5s.trash-alt"), "Delete Page", menu)
-        delete_action.triggered.connect(lambda: main_app.delete_page(self.page))
+        delete_action.triggered.connect(lambda: self.delete_requested.emit(self.page))
         move_up_action = QAction(icons.icon("fa5s.arrow-up"), "Move Up", menu)
-        move_up_action.triggered.connect(lambda: main_app.move_page(self.page, -1))
+        move_up_action.triggered.connect(lambda: self.move_requested.emit(self.page, -1))
         move_down_action = QAction(icons.icon("fa5s.arrow-down"), "Move Down", menu)
-        move_down_action.triggered.connect(lambda: main_app.move_page(self.page, 1))
+        move_down_action.triggered.connect(lambda: self.move_requested.emit(self.page, 1))
         menu.addAction(duplicate_action)
         menu.addAction(delete_action)
         menu.addSeparator()
@@ -108,7 +115,7 @@ class PageLabel(QWidget):
         self.name_label.setText(self.page.name or self._auto_name())
 
     def _auto_name(self) -> str:
-        index = self.main_app.scene.pages.index(self.page)
+        index = self.viewmodel.scene.pages.index(self.page)
         return f"Page {index + 1}"
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -125,14 +132,16 @@ class PageLabel(QWidget):
     def _finish_rename(self) -> None:
         self.name_edit.setVisible(False)
         self.name_label.setVisible(True)
-        self.main_app.rename_page(self.page, self.name_edit.text())
+        self.rename_requested.emit(self.page, self.name_edit.text())
         self.refresh_label()
 
 
 class AddPageButton(QWidget):
     """Trailing "+ Add Page" pill next to the last page's label."""
 
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    add_requested = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(PAGE_OVERLAY_STYLE)
@@ -146,7 +155,7 @@ class AddPageButton(QWidget):
         btn.setIcon(icons.icon("fa5s.plus", color=theme.TEXT_PRIMARY))
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.clicked.connect(main_app.add_new_page)
+        btn.clicked.connect(self.add_requested.emit)
         layout.addWidget(btn)
 
 
@@ -155,23 +164,49 @@ class PageOverlayManager:
     parented onto the view's viewport. `rebuild()` re-derives the label set
     after structural changes (add/delete/duplicate/move); `sync()` runs every
     repaint to reposition labels under their page and report the
-    most-visible page back to CoreDesignApp as the active page."""
+    most-visible page back to EditorView (via `on_active_page_changed`) as
+    the active page.
 
-    def __init__(self, main_app: "CoreDesignApp", viewport: QWidget) -> None:
-        self.main_app = main_app
+    Only reads document state through `viewmodel`; every action that needs
+    EditorView-level orchestration (rebuilding overlays, refreshing panels)
+    is handed off through the `on_*` callbacks instead of a `main_app`
+    back-reference."""
+
+    def __init__(
+        self,
+        viewmodel: "EditorViewModel",
+        viewport: QWidget,
+        on_add: Callable[[], None],
+        on_duplicate: Callable[[Page], None],
+        on_delete: Callable[[Page], None],
+        on_move: Callable[[Page, int], None],
+        on_rename: Callable[[Page, str], None],
+        on_active_page_changed: Callable[[Page], None],
+    ) -> None:
+        self.viewmodel = viewmodel
         self.viewport = viewport
+        self._on_duplicate = on_duplicate
+        self._on_delete = on_delete
+        self._on_move = on_move
+        self._on_rename = on_rename
+        self._on_active_page_changed = on_active_page_changed
         self.labels: dict[Page, PageLabel] = {}
-        self.add_button = AddPageButton(main_app, viewport)
+        self.add_button = AddPageButton(viewport)
+        self.add_button.add_requested.connect(on_add)
         self.add_button.show()
 
     def rebuild(self) -> None:
-        pages = self.main_app.scene.pages
+        pages = self.viewmodel.scene.pages
         stale = [page for page in self.labels if page not in pages]
         for page in stale:
             self.labels.pop(page).deleteLater()
         for page in pages:
             if page not in self.labels:
-                label = PageLabel(self.main_app, page, self.viewport)
+                label = PageLabel(self.viewmodel, page, self.viewport)
+                label.duplicate_requested.connect(self._on_duplicate)
+                label.delete_requested.connect(self._on_delete)
+                label.move_requested.connect(self._on_move)
+                label.rename_requested.connect(self._on_rename)
                 label.show()
                 self.labels[page] = label
             else:
@@ -179,7 +214,7 @@ class PageOverlayManager:
         self.add_button.raise_()
 
     def sync(self, view: "ZoomableGraphicsView") -> None:
-        scene = self.main_app.scene
+        scene = self.viewmodel.scene
         if set(scene.pages) != set(self.labels):
             self.rebuild()
         if not scene.pages:
@@ -193,7 +228,11 @@ class PageOverlayManager:
 
         for page in scene.pages:
             label = self.labels[page]
-            frame_rect = page.frame.sceneBoundingRect()
+            # page.rect(), not page.frame.sceneBoundingRect() -- the frame's
+            # boundingRect() is padded out for resize/rotate-handle hit
+            # testing (see _HandleMixin), which isn't the page's actual
+            # visual extent and would float the label/button well below it.
+            frame_rect = page.rect()
             page_view_rect = QRectF(
                 view.mapFromScene(frame_rect.topLeft()), view.mapFromScene(frame_rect.bottomRight())
             )
@@ -222,7 +261,7 @@ class PageOverlayManager:
         else:
             # Last page's label is culled (scrolled far away) -- fall back to
             # hanging the button directly off the page itself.
-            frame_rect = last_page.frame.sceneBoundingRect()
+            frame_rect = last_page.rect()
             bottom_center = view.mapFromScene(frame_rect.center().x(), frame_rect.bottom())
             size = self.add_button.sizeHint()
             pos = QPoint(bottom_center.x() - size.width() // 2, bottom_center.y() + OVERLAY_GAP)
@@ -230,4 +269,4 @@ class PageOverlayManager:
             self.add_button.move(pos)
 
         if best_page is not None:
-            self.main_app.set_active_page(best_page)
+            self._on_active_page_changed(best_page)

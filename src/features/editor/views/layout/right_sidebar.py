@@ -7,12 +7,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from src.core import icons, theme
 from src.features.editor.canvas.items import MIN_SIZE, can_edit_height, get_item_size, is_aspect_locked
-from src.features.editor.properties_viewmodel import PropertiesPanelViewModel
+from src.features.editor.canvas.page import PAGE_MIN_SIZE
+from src.features.editor.viewmodels.properties_viewmodel import PropertiesPanelViewModel
 
 if TYPE_CHECKING:
     from src.features.editor.canvas.page import Page
     from src.features.editor.canvas.scene import DesignScene
-    from src.features.editor.editor_view import CoreDesignApp
+    from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
 
 RIGHT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("right_sidebar.qss"))
 
@@ -104,9 +105,12 @@ def _toggle_button(icon_name: str, tooltip: str, checked: bool) -> QPushButton:
     return btn
 
 class PropertiesPanel(QWidget):
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    def __init__(self, editor_viewmodel: "EditorViewModel", parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.main_app = main_app
+        # Two different viewmodels in play: `editor_viewmodel` (document
+        # state -- the scene) vs. `self.viewmodel` (item-property mutation
+        # helpers, PropertiesPanelViewModel -- see viewmodels/properties_viewmodel.py).
+        self.editor_viewmodel = editor_viewmodel
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(RIGHT_SIDEBAR_STYLE)
         self.setFixedWidth(PANEL_WIDTH)
@@ -151,7 +155,7 @@ class PropertiesPanel(QWidget):
 
     def inspect_selection(self, items: list[QGraphicsItem]) -> None:
         self.clear_layout()
-        frames = self.main_app.scene.page_frames()
+        frames = self.editor_viewmodel.scene.page_frames()
         real_items = [i for i in items if i not in frames]
 
         if not real_items:
@@ -174,7 +178,7 @@ class PropertiesPanel(QWidget):
         # 2. Custom settings depending on type
         if isinstance(item, QGraphicsItemGroup):
             btn_ungroup = _button("fa5s.object-ungroup", "Ungroup")
-            btn_ungroup.clicked.connect(lambda: self.main_app.scene.ungroup_items([item]))
+            btn_ungroup.clicked.connect(lambda: self.editor_viewmodel.scene.ungroup_items([item]))
             self.main_layout.addWidget(_section_header("Group"))
             self.main_layout.addWidget(btn_ungroup)
 
@@ -182,16 +186,16 @@ class PropertiesPanel(QWidget):
             self.main_layout.addWidget(_section_header("Shape Styling"))
 
             btn_color = _button(ICON_PALETTE, "Change Color")
-            btn_color.clicked.connect(lambda: self.viewmodel.change_shape_color(item, self.main_app.scene.undo_stack))
+            btn_color.clicked.connect(lambda: self.viewmodel.change_shape_color(item, self.editor_viewmodel.scene.undo_stack))
             self.main_layout.addWidget(btn_color)
 
             btn_gradient = _button("fa5s.fill-drip", "Add Gradient")
-            btn_gradient.clicked.connect(lambda: self.viewmodel.apply_gradient_fill(item, self.main_app.scene.undo_stack))
+            btn_gradient.clicked.connect(lambda: self.viewmodel.apply_gradient_fill(item, self.editor_viewmodel.scene.undo_stack))
             self.main_layout.addWidget(btn_gradient)
 
             self.main_layout.addWidget(_section_header("Stroke"))
             btn_stroke_color = _button("fa5s.pen", "Stroke Color")
-            btn_stroke_color.clicked.connect(lambda: self.viewmodel.change_stroke_color(item, self.main_app.scene.undo_stack))
+            btn_stroke_color.clicked.connect(lambda: self.viewmodel.change_stroke_color(item, self.editor_viewmodel.scene.undo_stack))
             self.main_layout.addWidget(btn_stroke_color)
 
             stroke_width = QSpinBox()
@@ -199,7 +203,7 @@ class PropertiesPanel(QWidget):
             stroke_width.setValue(item.pen().width())
             stroke_width.setSuffix(" px")
             def on_stroke_width_changed(width: int) -> None:
-                self.viewmodel.set_stroke_width(item, width, self.main_app.scene.undo_stack)
+                self.viewmodel.set_stroke_width(item, width, self.editor_viewmodel.scene.undo_stack)
             stroke_width.valueChanged.connect(on_stroke_width_changed)
             self.main_layout.addWidget(stroke_width)
 
@@ -210,7 +214,7 @@ class PropertiesPanel(QWidget):
             font_box.setCurrentFont(item.font())
 
             def on_font_changed(font: QFont) -> None:
-                self.viewmodel.change_text_font(item, font, self.main_app.scene.undo_stack)
+                self.viewmodel.change_text_font(item, font, self.editor_viewmodel.scene.undo_stack)
             font_box.currentFontChanged.connect(on_font_changed)
             self.main_layout.addWidget(font_box)
 
@@ -220,12 +224,12 @@ class PropertiesPanel(QWidget):
             size_box.setValue(item.font().pointSize())
 
             def on_size_changed(size: int) -> None:
-                self.viewmodel.change_text_size(item, size, self.main_app.scene.undo_stack)
+                self.viewmodel.change_text_size(item, size, self.editor_viewmodel.scene.undo_stack)
             size_box.valueChanged.connect(on_size_changed)
             self.main_layout.addWidget(size_box)
 
             btn_color = _button(ICON_PALETTE, "Text Color")
-            btn_color.clicked.connect(lambda: self.viewmodel.change_text_color(item, self.main_app.scene.undo_stack))
+            btn_color.clicked.connect(lambda: self.viewmodel.change_text_color(item, self.editor_viewmodel.scene.undo_stack))
             self.main_layout.addWidget(btn_color)
 
             self.main_layout.addWidget(_section_header("Style"))
@@ -234,11 +238,11 @@ class PropertiesPanel(QWidget):
             btn_italic = _toggle_button("fa5s.italic", "Italic", font.italic())
             btn_underline = _toggle_button("fa5s.underline", "Underline", font.underline())
             def on_bold_toggled(on: bool) -> None:
-                self.viewmodel.toggle_text_bold(item, on, self.main_app.scene.undo_stack)
+                self.viewmodel.toggle_text_bold(item, on, self.editor_viewmodel.scene.undo_stack)
             def on_italic_toggled(on: bool) -> None:
-                self.viewmodel.toggle_text_italic(item, on, self.main_app.scene.undo_stack)
+                self.viewmodel.toggle_text_italic(item, on, self.editor_viewmodel.scene.undo_stack)
             def on_underline_toggled(on: bool) -> None:
-                self.viewmodel.toggle_text_underline(item, on, self.main_app.scene.undo_stack)
+                self.viewmodel.toggle_text_underline(item, on, self.editor_viewmodel.scene.undo_stack)
             btn_bold.toggled.connect(on_bold_toggled)
             btn_italic.toggled.connect(on_italic_toggled)
             btn_underline.toggled.connect(on_underline_toggled)
@@ -261,7 +265,7 @@ class PropertiesPanel(QWidget):
                 btn = _button(icon_name, "")
                 btn.setToolTip(tooltip)
                 btn.clicked.connect(
-                    lambda _checked=False, a=alignment: self.viewmodel.set_text_alignment(item, a, self.main_app.scene.undo_stack)
+                    lambda _checked=False, a=alignment: self.viewmodel.set_text_alignment(item, a, self.editor_viewmodel.scene.undo_stack)
                 )
                 align_row.addWidget(btn)
             self.main_layout.addLayout(align_row)
@@ -279,11 +283,11 @@ class PropertiesPanel(QWidget):
         self.main_layout.addWidget(_section_header("Arrangement"))
 
         btn_front = _button("fa5s.arrow-up", "Bring to Front")
-        btn_front.clicked.connect(lambda: self.main_app.scene.bring_to_front(item))
+        btn_front.clicked.connect(lambda: self.editor_viewmodel.scene.bring_to_front(item))
         self.main_layout.addWidget(btn_front)
 
         btn_back = _button("fa5s.arrow-down", "Send to Back")
-        btn_back.clicked.connect(lambda: self.main_app.scene.send_to_back(item))
+        btn_back.clicked.connect(lambda: self.editor_viewmodel.scene.send_to_back(item))
         self.main_layout.addWidget(btn_back)
 
     def _inspect_multi(self, items: list[QGraphicsItem]) -> None:
@@ -301,8 +305,8 @@ class PropertiesPanel(QWidget):
         self.main_layout.addWidget(_section_header("Distribute"))
         btn_dist_h = _button("fa5s.grip-lines-vertical", "Horizontally")
         btn_dist_v = _button("fa5s.grip-lines", "Vertically")
-        btn_dist_h.clicked.connect(lambda: self.main_app.scene.distribute_items("horizontal"))
-        btn_dist_v.clicked.connect(lambda: self.main_app.scene.distribute_items("vertical"))
+        btn_dist_h.clicked.connect(lambda: self.editor_viewmodel.scene.distribute_items("horizontal"))
+        btn_dist_v.clicked.connect(lambda: self.editor_viewmodel.scene.distribute_items("vertical"))
         if len(items) < 3:
             btn_dist_h.setEnabled(False)
             btn_dist_v.setEnabled(False)
@@ -317,15 +321,15 @@ class PropertiesPanel(QWidget):
         self.main_layout.addWidget(_section_header("Arrangement"))
 
         btn_front = _button("fa5s.arrow-up", "Bring to Front")
-        btn_front.clicked.connect(lambda: self.main_app.scene.bring_items_to_front(items))
+        btn_front.clicked.connect(lambda: self.editor_viewmodel.scene.bring_items_to_front(items))
         self.main_layout.addWidget(btn_front)
 
         btn_back = _button("fa5s.arrow-down", "Send to Back")
-        btn_back.clicked.connect(lambda: self.main_app.scene.send_items_to_back(items))
+        btn_back.clicked.connect(lambda: self.editor_viewmodel.scene.send_items_to_back(items))
         self.main_layout.addWidget(btn_back)
 
         btn_group = _button("fa5s.object-group", "Group")
-        btn_group.clicked.connect(lambda: self.main_app.scene.group_items(items))
+        btn_group.clicked.connect(lambda: self.editor_viewmodel.scene.group_items(items))
         self.main_layout.addWidget(btn_group)
 
     def _add_effects_section(self, items: list[QGraphicsItem]) -> None:
@@ -343,9 +347,9 @@ class PropertiesPanel(QWidget):
         def on_opacity_changed(value: int) -> None:
             fraction = value / 100.0
             if len(items) == 1:
-                self.viewmodel.set_opacity(items[0], fraction, self.main_app.scene.undo_stack)
+                self.viewmodel.set_opacity(items[0], fraction, self.editor_viewmodel.scene.undo_stack)
             else:
-                self.viewmodel.set_opacity_multi(items, fraction, self.main_app.scene.undo_stack)
+                self.viewmodel.set_opacity_multi(items, fraction, self.editor_viewmodel.scene.undo_stack)
         opacity_slider.valueChanged.connect(on_opacity_changed)
         self.main_layout.addWidget(opacity_slider)
 
@@ -355,9 +359,9 @@ class PropertiesPanel(QWidget):
 
         def on_shadow_toggled(checked: bool) -> None:
             if len(items) == 1:
-                self.viewmodel.toggle_shadow(items[0], checked, self.main_app.scene.undo_stack)
+                self.viewmodel.toggle_shadow(items[0], checked, self.editor_viewmodel.scene.undo_stack)
             else:
-                self.viewmodel.toggle_shadow_multi(items, checked, self.main_app.scene.undo_stack)
+                self.viewmodel.toggle_shadow_multi(items, checked, self.editor_viewmodel.scene.undo_stack)
         shadow_checkbox.toggled.connect(on_shadow_toggled)
         self.main_layout.addWidget(shadow_checkbox)
 
@@ -370,7 +374,7 @@ class PropertiesPanel(QWidget):
         for edge, tooltip in (("left", "Align Left"), ("h_center", "Align Center"), ("right", "Align Right")):
             btn = _button(h_icons[edge], "")
             btn.setToolTip(tooltip)
-            btn.clicked.connect(lambda _checked=False, e=edge: self.main_app.scene.align_items(e))
+            btn.clicked.connect(lambda _checked=False, e=edge: self.editor_viewmodel.scene.align_items(e))
             h_row.addWidget(btn)
         self.main_layout.addLayout(h_row)
 
@@ -382,7 +386,7 @@ class PropertiesPanel(QWidget):
         ):
             btn = _text_button(label_text)
             btn.setToolTip(tooltip)
-            btn.clicked.connect(lambda _checked=False, e=edge: self.main_app.scene.align_items(e))
+            btn.clicked.connect(lambda _checked=False, e=edge: self.editor_viewmodel.scene.align_items(e))
             v_row.addWidget(btn)
         self.main_layout.addLayout(v_row)
 
@@ -397,7 +401,7 @@ class PropertiesPanel(QWidget):
             box.setValue(round(value))
 
         def on_pos_changed(_value: int = 0) -> None:
-            self.viewmodel.set_item_position(item, x_box.value(), y_box.value(), self.main_app.scene.undo_stack)
+            self.viewmodel.set_item_position(item, x_box.value(), y_box.value(), self.editor_viewmodel.scene.undo_stack)
         x_box.valueChanged.connect(on_pos_changed)
         y_box.valueChanged.connect(on_pos_changed)
         pos_row = QHBoxLayout()
@@ -436,7 +440,7 @@ class PropertiesPanel(QWidget):
             h_box.blockSignals(False)
 
         def on_width_changed(width: int) -> None:
-            new_size = self.viewmodel.set_item_size(item, width, h_box.value(), self.main_app.scene.undo_stack)
+            new_size = self.viewmodel.set_item_size(item, width, h_box.value(), self.editor_viewmodel.scene.undo_stack)
             sync_size_boxes(new_size)
 
         def on_height_changed(height: int) -> None:
@@ -449,7 +453,7 @@ class PropertiesPanel(QWidget):
                 current = get_item_size(item)
                 if current is not None and current[1]:
                     width = height * (current[0] / current[1])
-            new_size = self.viewmodel.set_item_size(item, width, height, self.main_app.scene.undo_stack)
+            new_size = self.viewmodel.set_item_size(item, width, height, self.editor_viewmodel.scene.undo_stack)
             sync_size_boxes(new_size)
 
         w_box.valueChanged.connect(on_width_changed)
@@ -465,7 +469,7 @@ class PropertiesPanel(QWidget):
 
         w_box, h_box = QSpinBox(), QSpinBox()
         for box, prefix, value in ((w_box, "W  ", page.width), (h_box, "H  ", page.height)):
-            box.setRange(100, 10000)
+            box.setRange(int(PAGE_MIN_SIZE), 10000)
             box.setPrefix(prefix)
             box.setCursor(Qt.CursorShape.IBeamCursor)
             box.setValue(int(value))

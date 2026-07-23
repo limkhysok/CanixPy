@@ -15,9 +15,9 @@ _PDF_POINTS_PER_INCH = 72
 
 def _page_source_rect(page: "Page") -> QRectF:
     """The exported page's region within the shared multi-page scene --
-    pages are stacked at different y_offsets, not all anchored at the scene
-    origin, so this can't just be QRectF(0, 0, width, height)."""
-    return QRectF(0, page.y_offset, page.width, page.height)
+    pages are freely positioned, not all anchored at the scene origin, so
+    this can't just be QRectF(0, 0, width, height)."""
+    return QRectF(page.x_offset, page.y_offset, page.width, page.height)
 
 
 def _hide_page_background(scene: QGraphicsScene, page: "Page") -> tuple[bool, QBrush]:

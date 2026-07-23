@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Callable, cast
 from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsView, QGraphicsScene, QMenu, QMessageBox, QWidget
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import (
@@ -25,11 +25,13 @@ from src.features.editor.canvas.page import Page
 from src.features.editor.canvas.scene import DesignScene
 
 if TYPE_CHECKING:
-    from src.features.editor.editor_view import CoreDesignApp
-    from src.features.editor.layout.page_overlay import PageOverlayManager
+    from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
+    from src.features.editor.views.layout.page_overlay import PageOverlayManager
 
 NUDGE_STEP = 1
 NUDGE_STEP_LARGE = 10
+ZOOM_STEP_IN = 1.25
+ZOOM_STEP_OUT = 0.8
 _NUDGE_KEYS: dict[int, tuple[int, int]] = {
     Qt.Key.Key_Left: (-1, 0),
     Qt.Key.Key_Right: (1, 0),
@@ -47,14 +49,29 @@ _ALT_CYCLE_TOLERANCE = 4
 FIT_MARGIN = 40
 
 class ZoomableGraphicsView(QGraphicsView):
-    def __init__(self, scene: QGraphicsScene, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        scene: QGraphicsScene,
+        viewmodel: "EditorViewModel",
+        on_refresh: Callable[[], None],
+        on_properties_change: Callable[[], None],
+        on_selection_sync: Callable[[], None],
+        on_page_properties_shown: Callable[[Page], None],
+        on_page_properties_cleared: Callable[[], None],
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(scene, parent)
-        self.main_app = main_app
+        self.viewmodel = viewmodel
+        self._on_refresh = on_refresh
+        self._on_properties_change = on_properties_change
+        self._on_selection_sync = on_selection_sync
+        self._on_page_properties_shown = on_page_properties_shown
+        self._on_page_properties_cleared = on_page_properties_cleared
         self._drag_start_positions: dict[QGraphicsItem, QPointF] = {}
         self._alt_cycle_pos: QPointF | None = None
         self._alt_cycle_index: int = 0
         self._pressed_on_page: Page | None = None
-        # Set by CoreDesignApp -- positions/rebuilds the per-page floating
+        # Set by EditorView -- positions/rebuilds the per-page floating
         # labels every repaint. Not owned/constructed here so this view stays
         # decoupled from what the overlay UI actually is.
         self.page_overlay_manager: "PageOverlayManager | None" = None
@@ -78,14 +95,17 @@ class ZoomableGraphicsView(QGraphicsView):
         first show, so opening a task with a canvas bigger than the viewport
         (e.g. a 1080x1920 Story) doesn't start zoomed in past the page edges,
         forcing a manual Ctrl+scroll out."""
-        rect = page.frame.sceneBoundingRect().adjusted(-FIT_MARGIN, -FIT_MARGIN, FIT_MARGIN, FIT_MARGIN)
+        # page.rect(), not page.frame.sceneBoundingRect() -- the frame's
+        # boundingRect() is padded out for resize/rotate-handle hit testing
+        # (see _HandleMixin), which would zoom out far past the actual page.
+        rect = page.rect().adjusted(-FIT_MARGIN, -FIT_MARGIN, FIT_MARGIN, FIT_MARGIN)
         self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
 
     def scroll_to_page(self, page: Page) -> None:
         """Centers the view on `page` without changing zoom -- used to jump
         to a page (e.g. right after adding/duplicating one) in a document
         where every page is already reachable by scrolling."""
-        self.centerOn(page.frame.sceneBoundingRect().center())
+        self.centerOn(page.rect().center())
 
     def request_fit_to_page(self, page: Page) -> None:
         """Fit now if the viewport already has real geometry, otherwise defer
@@ -104,8 +124,7 @@ class ZoomableGraphicsView(QGraphicsView):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-            zoom_factor = 1.25 if event.angleDelta().y() > 0 else 0.8
-            self.scale(zoom_factor, zoom_factor)
+            self._zoom(ZOOM_STEP_IN if event.angleDelta().y() > 0 else ZOOM_STEP_OUT)
         else:
             super().wheelEvent(event)
 
@@ -197,7 +216,7 @@ class ZoomableGraphicsView(QGraphicsView):
         if not is_layer_locked(image):
             scene.clearSelection()
             image.setSelected(True)
-            self.main_app.sync_editor_selection()
+            self._on_selection_sync()
 
         self._show_image_context_menu(image, event.globalPos())
 
@@ -206,7 +225,7 @@ class ZoomableGraphicsView(QGraphicsView):
         menu = QMenu(self)
 
         duplicate_action = QAction(icons.icon("fa5s.clone", color=theme.TEXT_PRIMARY), "Duplicate", menu)
-        duplicate_action.triggered.connect(lambda: self.main_app.duplicate_items([image]))
+        duplicate_action.triggered.connect(lambda: self.viewmodel.duplicate_items([image]))
         menu.addAction(duplicate_action)
 
         locked = is_layer_locked(image)
@@ -234,7 +253,7 @@ class ZoomableGraphicsView(QGraphicsView):
 
     def _toggle_image_lock(self, image: ResizablePixmapItem) -> None:
         set_layer_locked(image, not is_layer_locked(image))
-        self.main_app.refresh_editor_panels()
+        self._on_refresh()
 
     def _show_image_info(self, image: ResizablePixmapItem) -> None:
         native = image.pixmap().size()
@@ -261,25 +280,40 @@ class ZoomableGraphicsView(QGraphicsView):
         self._drag_start_positions = {}
         if moved:
             cast(DesignScene, self.scene()).push_move_undo(moved)
-            self.main_app.update_properties_panel()
+            self._on_properties_change()
 
         scene = cast(DesignScene, self.scene())
         if not scene.selectedItems():
             if self._pressed_on_page is not None:
-                self.main_app.show_page_properties(self._pressed_on_page)
+                self._on_page_properties_shown(self._pressed_on_page)
             else:
-                self.main_app.clear_page_properties()
+                self._on_page_properties_cleared()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         scene = cast(DesignScene, self.scene())
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+        # Held Space temporarily swaps rubber-band selection for Qt's built-in
+        # hand-drag panning (the Figma/Canva convention) -- isAutoRepeat()
+        # guards against the OS repeating this event every few ms while the
+        # key stays down, which would otherwise spam redundant mode-sets.
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        elif event.key() == Qt.Key.Key_Escape:
+            scene.clearSelection()
+        elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            scene.delete_items(scene.selectedItems())
+        elif event.matches(QKeySequence.StandardKey.Cut):
+            self.viewmodel.copy_selection()
             scene.delete_items(scene.selectedItems())
         elif event.matches(QKeySequence.StandardKey.Copy):
-            self.main_app.copy_selection()
+            self.viewmodel.copy_selection()
         elif event.matches(QKeySequence.StandardKey.Paste):
-            self.main_app.paste_clipboard()
+            self.viewmodel.paste_clipboard()
+        elif event.matches(QKeySequence.StandardKey.SelectAll):
+            for item in scene.items():
+                if item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable:
+                    item.setSelected(True)
         elif event.key() == Qt.Key.Key_D and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            self.main_app.duplicate_selection()
+            self.viewmodel.duplicate_selection()
         elif event.key() == Qt.Key.Key_G and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 scene.ungroup_items(scene.selectedItems())
@@ -287,8 +321,33 @@ class ZoomableGraphicsView(QGraphicsView):
                 scene.group_items(scene.selectedItems())
         elif event.key() in _NUDGE_KEYS:
             self._nudge_selection(event.key(), event.modifiers())
+        elif event.matches(QKeySequence.StandardKey.ZoomIn):
+            self._zoom(ZOOM_STEP_IN)
+        elif event.matches(QKeySequence.StandardKey.ZoomOut):
+            self._zoom(ZOOM_STEP_OUT)
+        elif event.key() == Qt.Key.Key_0 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.fit_to_page(self.viewmodel.active_page)
+        elif event.key() == Qt.Key.Key_1 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._reset_zoom()
         else:
             super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        else:
+            super().keyReleaseEvent(event)
+
+    def _zoom(self, factor: float) -> None:
+        self.scale(factor, factor)
+
+    def _reset_zoom(self) -> None:
+        """Zoom to exactly 100% while keeping whatever's currently centered
+        in view -- resetTransform() alone would also snap the pan back to the
+        scene origin, jumping the view away from the page being edited."""
+        center = self.mapToScene(self.viewport().rect().center())
+        self.resetTransform()
+        self.centerOn(center)
 
     def _nudge_selection(self, key: int, modifiers: Qt.KeyboardModifier) -> None:
         scene = cast(DesignScene, self.scene())

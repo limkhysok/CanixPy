@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QAction, QColor
@@ -16,9 +15,6 @@ from PySide6.QtWidgets import (
 
 from src.core import icons, theme
 
-if TYPE_CHECKING:
-    from src.features.editor.editor_view import CoreDesignApp
-
 TOP_NAVBAR_STYLE = theme.load_qss(Path(__file__).with_name("top_navbar.qss"))
 
 ICON_BUTTON_SIZE = QSize(38, 38)
@@ -27,13 +23,20 @@ ICON_BUTTON_SIZE = QSize(38, 38)
 class TopNavbar(QWidget):
     """Header strip above the canvas: back navigation, undo/redo, and export.
     Per-page controls (name/rename/duplicate/delete/move, Add Page) float
-    directly over the canvas instead -- see layout/page_overlay.py."""
+    directly over the canvas instead -- see layout/page_overlay.py. Doesn't
+    know about EditorView -- every button just emits a signal; EditorView
+    (the composition root) wires each one to the actual action."""
 
     back_clicked = Signal()
+    undo_clicked = Signal()
+    redo_clicked = Signal()
+    export_png_clicked = Signal()
+    export_png_transparent_clicked = Signal()
+    export_jpg_clicked = Signal()
+    export_pdf_clicked = Signal()
 
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.main_app = main_app
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(TOP_NAVBAR_STYLE)
 
@@ -49,8 +52,8 @@ class TopNavbar(QWidget):
 
         self.btn_undo = self._icon_button("fa5s.undo", "Undo (Ctrl+Z)")
         self.btn_redo = self._icon_button("fa5s.redo", "Redo (Ctrl+Y)")
-        self.btn_undo.clicked.connect(main_app.undo)
-        self.btn_redo.clicked.connect(main_app.redo)
+        self.btn_undo.clicked.connect(self.undo_clicked.emit)
+        self.btn_redo.clicked.connect(self.redo_clicked.emit)
         self.btn_undo.setEnabled(False)
         self.btn_redo.setEnabled(False)
         undo_redo_layout = QHBoxLayout()
@@ -70,10 +73,10 @@ class TopNavbar(QWidget):
 
         export_menu = QMenu(btn_export)
         export_actions = (
-            ("PNG", main_app.export_page_to_png),
-            ("PNG (Transparent)", main_app.export_page_to_png_transparent),
-            ("JPG", main_app.export_page_to_jpg),
-            ("PDF", main_app.export_page_to_pdf),
+            ("PNG", self.export_png_clicked.emit),
+            ("PNG (Transparent)", self.export_png_transparent_clicked.emit),
+            ("JPG", self.export_jpg_clicked.emit),
+            ("PDF", self.export_pdf_clicked.emit),
         )
         for label, handler in export_actions:
             action = QAction(label, export_menu)

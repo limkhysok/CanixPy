@@ -5,7 +5,7 @@ from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 
 from src.features.editor import persistence
-from src.features.editor.editor_view import CoreDesignApp
+from src.features.editor.views.editor_view import EditorView
 from src.features.home.models.models import Task
 from src.features.home.views.home_view import HomeView
 
@@ -21,7 +21,7 @@ class App(QMainWindow):
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
 
-        self.editor_view: CoreDesignApp | None = None
+        self.editor_view: EditorView | None = None
         self._current_task: Task | None = None
 
         self.home_view = HomeView()
@@ -34,7 +34,7 @@ class App(QMainWindow):
             self.editor_view.deleteLater()
 
         self._current_task = task
-        self.editor_view = CoreDesignApp(task.canvas_size)
+        self.editor_view = EditorView(task.canvas_size)
         self.editor_view.back_to_home.connect(self._on_editor_closed)
 
         if task.content is not None:

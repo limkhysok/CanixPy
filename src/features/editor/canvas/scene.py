@@ -1,10 +1,9 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
+from typing import Callable
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsItemGroup,
     QGraphicsLineItem,
-    QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsItem,
     QWidget,
@@ -13,6 +12,7 @@ from PySide6.QtCore import Qt, QLineF, QPointF, QRectF
 from PySide6.QtGui import QBrush, QColor, QFont, QPen
 from src.core import theme
 from src.features.editor.canvas.items import (
+    PageFrameItem,
     POLYGON_TEMPLATES,
     ResizableEllipseItem,
     ResizablePixmapItem,
@@ -24,9 +24,6 @@ from src.features.editor.canvas.items import (
 from src.features.editor.canvas.page import PAGE_GAP, Page, page_for_item
 from src.features.editor.canvas.undo_manager import UndoStack
 
-if TYPE_CHECKING:
-    from src.features.editor.editor_view import CoreDesignApp
-
 # Scene-unit padding kept independent of view.py's FIT_MARGIN (a related but
 # distinct concept -- zoom-fit padding, not scene-rect padding) to avoid a
 # circular import (view.py already imports DesignScene from this module).
@@ -36,11 +33,26 @@ SCENE_RECT_MARGIN = 40
 SCROLL_END_MARGIN = 400
 
 class DesignScene(QGraphicsScene):
-    def __init__(self, main_app: "CoreDesignApp", parent: QWidget | None = None) -> None:
+    """The document's live Qt Graphics View state (pages + items). Doesn't
+    know about EditorView/EditorViewModel -- callers wanting to be notified
+    of a structural change, a properties-relevant change, or an undo-stack
+    change pass in plain callbacks instead, and connect to `selectionChanged`
+    (a real QGraphicsScene signal) themselves from the outside."""
+
+    def __init__(
+        self,
+        canvas_size: tuple[int, int] = (800, 600),
+        on_refresh: Callable[[], None] | None = None,
+        on_properties_change: Callable[[], None] | None = None,
+        on_history_change: Callable[[], None] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
-        self.main_app = main_app
+        self._canvas_size = canvas_size
+        self.on_refresh = on_refresh
+        self.on_properties_change = on_properties_change
         self.pages: list[Page] = []
-        self.undo_stack = UndoStack(on_change=self.main_app.update_history_buttons)
+        self.undo_stack = UndoStack(on_change=on_history_change)
         self.setBackgroundBrush(QBrush(QColor(theme.CANVAS_SURROUND)))
         self._snap_guide_items: list[QGraphicsLineItem] = []
         # QGraphicsScene.addItem() doesn't keep a PySide item's underlying
@@ -53,15 +65,28 @@ class DesignScene(QGraphicsScene):
         # needs this explicitly; regular add/delete/duplicate already keep
         # items alive via their undo entries.
         self._item_refs: list[QGraphicsItem] = []
-        self._update_scene_rect()
-        self.selectionChanged.connect(self.main_app.sync_editor_selection)
+        self.update_scene_rect()
+
+    def _notify_refresh(self) -> None:
+        if self.on_refresh is not None:
+            self.on_refresh()
+
+    def notify_properties_change(self) -> None:
+        if self.on_properties_change is not None:
+            self.on_properties_change()
 
     # --- page lifecycle ----------------------------------------------------
-    def _create_frame(self, width: int, height: int, background_color: str) -> QGraphicsRectItem:
+    def _create_frame(self, width: int, height: int, background_color: str) -> PageFrameItem:
         # Very low fixed zValue so background frames don't intercept mouse
         # clicks; filled opaque so each page reads as a floating "sheet"
-        # against the gray canvas surround.
-        frame = self.addRect(0, 0, width, height)
+        # against the gray canvas surround. Deliberately never made
+        # ItemIsSelectable -- frames must never show up in
+        # scene.selectedItems(), which the Properties panel, copy/paste, and
+        # Layers panel all assume (see `frames = scene.page_frames()`
+        # filtering throughout). PageFrameItem's resize handles are instead
+        # driven by EditorView._set_page_resize_handles.
+        frame = PageFrameItem(0, 0, width, height)
+        self.addItem(frame)
         frame.setPen(QColor(theme.BORDER))
         frame.setBrush(QBrush(QColor(background_color)))
         frame.setZValue(-1000)
@@ -76,126 +101,87 @@ class DesignScene(QGraphicsScene):
     def add_page(
         self, width: int, height: int, background_color: str = "#ffffff", name: str | None = None
     ) -> Page:
-        """Appends a new page below the current last one."""
-        y = 0.0
+        """Appends a new page, starting just below the current last one --
+        pages aren't auto-stacked, so this is only a one-time initial
+        placement; drag the page (PageFrameItem) to reposition it."""
+        x, y = 0.0, 0.0
         if self.pages:
             last = self.pages[-1]
-            y = last.y_offset + last.height + PAGE_GAP
+            x, y = last.x_offset, last.y_offset + last.height + PAGE_GAP
         frame = self._create_frame(width, height, background_color)
-        frame.setPos(0, y)
+        frame.setPos(x, y)
         page = Page(frame, name)
+        frame.page = page
         self.pages.append(page)
-        self._update_scene_rect()
+        self.update_scene_rect()
         return page
 
     def insert_page_after(
         self, source: Page, width: int, height: int, background_color: str = "#ffffff", name: str | None = None
     ) -> Page:
-        """Inserts a new page directly below `source`, pushing every
-        subsequent page down to make room."""
-        # Snapshotted *before* the new frame is created/positioned -- the
-        # new page's region starts out coinciding with wherever the old next
-        # page currently sits (that's the whole point, it's about to push it
-        # down), so page_for_item() evaluated after this point could
-        # misattribute the old next page's items to the brand new, still-
-        # empty page. See reflow_from()'s docstring for the general rule.
-        partition = self._partition_items()
+        """Inserts a new page into the page list right after `source` (drives
+        default numbering/order) and starts it positioned just below `source`
+        -- like add_page, only an initial placement, not an ongoing
+        invariant."""
         index = self.pages.index(source)
-        y = source.y_offset + source.height + PAGE_GAP
+        x, y = source.x_offset, source.y_offset + source.height + PAGE_GAP
         frame = self._create_frame(width, height, background_color)
-        frame.setPos(0, y)
+        frame.setPos(x, y)
         page = Page(frame, name)
+        frame.page = page
         self.pages.insert(index + 1, page)
-        self.reflow_from(index + 2, partition)
+        self.update_scene_rect()
         return page
 
     def delete_page(self, page: Page) -> None:
         if len(self.pages) <= 1:
             return  # always keep at least one page
-        partition = self._partition_items()
-        index = self.pages.index(page)
-        for item in partition.get(page, []):
+        for item in self._items_on_page(page):
             self.removeItem(item)
         self.removeItem(page.frame)
         self.pages.remove(page)
-        partition.pop(page, None)
-        self.reflow_from(index, partition)
+        self.update_scene_rect()
 
     def resize_page(self, page: Page, width: float, height: float) -> None:
-        # Snapshotted *before* resizing -- once page.set_size() runs, a page
-        # that just grew can transiently overlap the next page's not-yet-
-        # moved region, and page_for_item() would misattribute that page's
-        # items to the resized one. See reflow_from()'s docstring.
-        partition = self._partition_items()
         page.set_size(width, height)
-        self.reflow_from(self.pages.index(page) + 1, partition)
+        self.update_scene_rect()
 
     def move_page(self, page: Page, delta: int) -> None:
+        """Reorders the page list only (drives default "Page N" naming and
+        export numbering) -- doesn't move anything visually, since pages are
+        freely positioned; drag a page directly to reposition it."""
         index = self.pages.index(page)
         new_index = index + delta
         if not (0 <= new_index < len(self.pages)):
             return
-        partition = self._partition_items()
         self.pages[index], self.pages[new_index] = self.pages[new_index], self.pages[index]
-        self.reflow_from(min(index, new_index), partition)
 
     def page_frames(self) -> set[QGraphicsItem]:
         return {p.frame for p in self.pages}
 
-    def _partition_items(self) -> dict[Page, list[QGraphicsItem]]:
-        """Item->page assignment using the *current* page boundaries. Only
-        meaningful when those boundaries are all still non-overlapping (i.e.
-        before any page's geometry has been mutated this operation) -- see
-        reflow_from()."""
+    def _items_on_page(self, page: Page) -> list[QGraphicsItem]:
         frames = self.page_frames()
-        partition: dict[Page, list[QGraphicsItem]] = {p: [] for p in self.pages}
-        for item in self.items():
-            if item in frames or item.parentItem() is not None:
-                continue
-            partition[page_for_item(self.pages, item)].append(item)
-        return partition
+        return [
+            item for item in self.items()
+            if item not in frames and item.parentItem() is None and page_for_item(self.pages, item) is page
+        ]
 
-    def reflow_from(self, index: int, partition: dict[Page, list[QGraphicsItem]] | None = None) -> None:
-        """Recomputes every page's y_offset from `index` onward (stacked
-        top-to-bottom with PAGE_GAP), moving each page's own items along
-        with it.
-
-        `partition` should be captured via _partition_items() *before* the
-        triggering page's geometry (resize/insert/delete/reorder) was
-        mutated -- a page that just grew, or a newly inserted page, can
-        transiently overlap a not-yet-moved neighbor's old region, and
-        page_for_item()'s nearest-page tie-break would then misattribute
-        that neighbor's items to the wrong page if evaluated after the fact.
-        Defaults to computing it fresh (correct only when nothing has
-        changed yet) as a convenience for any future direct caller -- every
-        page-mutating method above passes an explicit pre-mutation snapshot.
-        """
-        if partition is None:
-            partition = self._partition_items()
-        moves: list[tuple[Page, float]] = []
-        y = 0.0 if index == 0 else self.pages[index - 1].y_offset + self.pages[index - 1].height + PAGE_GAP
-        for page in self.pages[index:]:
-            delta = y - page.y_offset
-            if delta:
-                moves.append((page, delta))
-            y += page.height + PAGE_GAP
-        for page, delta in moves:
-            page.set_y_offset(page.y_offset + delta)
-            for item in partition.get(page, []):
-                item.setPos(item.pos().x(), item.pos().y() + delta)
-        self._update_scene_rect()
-
-    def _update_scene_rect(self) -> None:
+    def update_scene_rect(self) -> None:
+        """Public -- PageFrameItem calls this after a drag/resize moves a
+        page outside the current scrollable area (see canvas/items.py)."""
         if not self.pages:
-            self.setSceneRect(0, 0, *self.main_app.canvas_size)
+            self.setSceneRect(0, 0, *self._canvas_size)
             return
-        max_w = max(p.width for p in self.pages)
-        bottom = self.pages[-1].y_offset + self.pages[-1].height
+        rects = [p.rect() for p in self.pages]
+        min_x = min(r.left() for r in rects)
+        min_y = min(r.top() for r in rects)
+        max_x = max(r.right() for r in rects)
+        max_y = max(r.bottom() for r in rects)
         self.setSceneRect(
-            -SCENE_RECT_MARGIN,
-            -SCENE_RECT_MARGIN,
-            max_w + 2 * SCENE_RECT_MARGIN,
-            bottom + SCENE_RECT_MARGIN + SCROLL_END_MARGIN,
+            min_x - SCENE_RECT_MARGIN,
+            min_y - SCENE_RECT_MARGIN,
+            (max_x - min_x) + 2 * SCENE_RECT_MARGIN,
+            (max_y - min_y) + SCENE_RECT_MARGIN + SCROLL_END_MARGIN,
         )
 
     # --- magnetic snap guides (see items.py _HandleMixin.itemChange) -----
@@ -206,7 +192,10 @@ class DesignScene(QGraphicsScene):
         dragging toward the page below)."""
         selected = set(self.selectedItems())
         frames = self.page_frames()
-        targets = [p.frame.sceneBoundingRect() for p in self.pages]
+        # p.rect(), not p.frame.sceneBoundingRect() -- the frame's
+        # boundingRect() is padded out for resize/rotate-handle hit testing
+        # (see _HandleMixin), not the page's real (unpadded) visual rect.
+        targets = [p.rect() for p in self.pages]
         for other in self.items():
             if other in frames or other is moving or other in selected or other.parentItem() is not None:
                 continue
@@ -293,7 +282,7 @@ class DesignScene(QGraphicsScene):
         new_z = max_z + 1
         item.setZValue(new_z)
         self._push_z_undo(item, old_z, new_z)
-        self.main_app.refresh_editor_panels()
+        self._notify_refresh()
 
     def send_to_back(self, item: QGraphicsItem) -> None:
         all_items = self.items()
@@ -305,7 +294,7 @@ class DesignScene(QGraphicsScene):
         new_z = min_z - 1
         item.setZValue(new_z)
         self._push_z_undo(item, old_z, new_z)
-        self.main_app.refresh_editor_panels()
+        self._notify_refresh()
 
     def bring_items_to_front(self, items: list[QGraphicsItem]) -> None:
         frames = self.page_frames()
@@ -339,15 +328,15 @@ class DesignScene(QGraphicsScene):
         def undo() -> None:
             for item, z in old_z.items():
                 item.setZValue(z)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         def redo() -> None:
             for item, z in new_z.items():
                 item.setZValue(z)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         self.undo_stack.push(undo, redo)
-        self.main_app.refresh_editor_panels()
+        self._notify_refresh()
 
     def _selection_bounds(self, items: list[QGraphicsItem]) -> QRectF:
         bounds = items[0].sceneBoundingRect()
@@ -437,11 +426,11 @@ class DesignScene(QGraphicsScene):
     def _push_z_undo(self, item: QGraphicsItem, old_z: float, new_z: float) -> None:
         def undo() -> None:
             item.setZValue(old_z)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         def redo() -> None:
             item.setZValue(new_z)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         self.undo_stack.push(undo, redo)
 
@@ -495,15 +484,15 @@ class DesignScene(QGraphicsScene):
         def undo() -> None:
             for item in items:
                 self.removeItem(item)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         def redo() -> None:
             for item in items:
                 self.addItem(item)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         self.undo_stack.push(undo, redo)
-        self.main_app.refresh_editor_panels()
+        self._notify_refresh()
 
     def delete_items(self, items: list[QGraphicsItem]) -> None:
         frames = self.page_frames()
@@ -517,15 +506,15 @@ class DesignScene(QGraphicsScene):
         def undo() -> None:
             for item in items:
                 self.addItem(item)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         def redo() -> None:
             for item in items:
                 self.removeItem(item)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         self.undo_stack.push(undo, redo)
-        self.main_app.refresh_editor_panels()
+        self._notify_refresh()
 
     def group_items(self, items: list[QGraphicsItem]) -> None:
         frames = self.page_frames()
@@ -544,7 +533,7 @@ class DesignScene(QGraphicsScene):
             box["group"] = group
             self.clearSelection()
             group.setSelected(True)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         def undo() -> None:
             group = box["group"]
@@ -554,7 +543,7 @@ class DesignScene(QGraphicsScene):
             self.clearSelection()
             for item in items:
                 item.setSelected(True)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         do()
         self.undo_stack.push(undo, do)
@@ -576,7 +565,7 @@ class DesignScene(QGraphicsScene):
             self.clearSelection()
             for item in children:
                 item.setSelected(True)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         def undo() -> None:
             new_group = self.createItemGroup(children)
@@ -584,7 +573,7 @@ class DesignScene(QGraphicsScene):
             box["group"] = new_group
             self.clearSelection()
             new_group.setSelected(True)
-            self.main_app.refresh_editor_panels()
+            self._notify_refresh()
 
         do()
         self.undo_stack.push(undo, do)
