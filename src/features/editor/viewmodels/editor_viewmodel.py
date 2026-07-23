@@ -75,26 +75,50 @@ class EditorViewModel:
 
     # --- PAGE CRUD -------------------------------------------------------
     def add_new_page(self) -> Page:
-        return self.scene.add_page(*self.canvas_size)
+        page = self.scene.add_page(*self.canvas_size)
+        index = self.scene.pages.index(page)
+        self.scene.undo_stack.push(
+            lambda: self.scene.delete_page(page),
+            lambda: self.scene.restore_page(page, index, []),
+        )
+        return page
 
     def duplicate_page(self, source: Page) -> Page:
         new_page = self.scene.insert_page_after(
             source, int(source.width), int(source.height), source.background_color
         )
         items_data = persistence.serialize_page_items(self.scene, source)
-        # No undo entry -- page-level actions (add/delete/duplicate/move)
-        # aren't undoable at all yet (a pre-existing gap, not new here), and
-        # add_items_with_undo would leave a half-broken entry that removes
-        # the duplicated items but not the duplicated page frame itself.
-        self.scene.add_items(persistence.deserialize_page_items(items_data, new_page))
+        new_items = persistence.deserialize_page_items(items_data, new_page)
+        self.scene.add_items(new_items)
         new_page.name = f"{self._page_label(source)} Copy"
+        index = self.scene.pages.index(new_page)
+        self.scene.undo_stack.push(
+            lambda: self.scene.delete_page(new_page),
+            lambda: self.scene.restore_page(new_page, index, new_items),
+        )
         return new_page
 
     def delete_page(self, page: Page) -> None:
+        if len(self.scene.pages) <= 1:
+            return  # always keep at least one page
+        index = self.scene.pages.index(page)
+        items = self.scene.items_on_page(page)
         self.scene.delete_page(page)
+        self.scene.undo_stack.push(
+            lambda: self.scene.restore_page(page, index, items),
+            lambda: self.scene.delete_page(page),
+        )
 
     def move_page(self, page: Page, delta: int) -> None:
+        index = self.scene.pages.index(page)
+        new_index = index + delta
+        if not (0 <= new_index < len(self.scene.pages)):
+            return
         self.scene.move_page(page, delta)
+        self.scene.undo_stack.push(
+            lambda: self.scene.move_page(page, -delta),
+            lambda: self.scene.move_page(page, delta),
+        )
 
     def rename_page(self, page: Page, name: str) -> None:
         name = name.strip()
@@ -129,6 +153,18 @@ class EditorViewModel:
         it's locked (and so can't actually be selected)."""
         data = [d for i in items if (d := persistence.serialize_item(i)) is not None]
         self._paste_data(data)
+
+    def duplicate_items_in_place(self, items: list[QGraphicsItem]) -> list[QGraphicsItem]:
+        """Like duplicate_items, but with no paste offset and without
+        touching the current selection -- used by Alt+drag-duplicate (see
+        ZoomableGraphicsView), where the *original* items keep dragging via
+        Qt's already-in-progress drag while an exact copy is left behind at
+        the pre-drag position."""
+        data = [d for i in items if (d := persistence.serialize_item(i)) is not None]
+        new_items = [item for d in data if (item := persistence.deserialize_item(d)) is not None]
+        if new_items:
+            self.scene.add_items_with_undo(new_items)
+        return new_items
 
     def _paste_data(self, data: list[dict[str, Any]]) -> None:
         if not data:

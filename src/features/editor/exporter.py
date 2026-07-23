@@ -1,8 +1,10 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QGraphicsScene
 from PySide6.QtGui import QBrush, QImage, QPageSize, QPainter, QPdfWriter, QPixmap
-from PySide6.QtCore import QMarginsF, QRectF, QSizeF, Qt
+from PySide6.QtCore import QMarginsF, QRectF, QSize, QSizeF, Qt
+from PySide6.QtSvg import QSvgGenerator
 
 if TYPE_CHECKING:
     from src.features.editor.canvas.page import Page
@@ -82,6 +84,23 @@ def export_scene_to_jpg(scene: QGraphicsScene, file_path: str, page: "Page") -> 
     image.save(file_path, "JPG", quality=92)
 
 
+def export_scene_to_svg(scene: QGraphicsScene, file_path: str, page: "Page") -> None:
+    width, height = int(page.width), int(page.height)
+    scene.clearSelection()
+
+    generator = QSvgGenerator()
+    generator.setFileName(file_path)
+    generator.setSize(QSize(width, height))
+    generator.setViewBox(QRectF(0, 0, width, height))
+    generator.setTitle(Path(file_path).stem)
+
+    painter = QPainter(generator)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    scene.render(painter, QRectF(0, 0, width, height), _page_source_rect(page))
+    painter.end()
+
+
 def export_scene_to_pdf(scene: QGraphicsScene, file_path: str, page: "Page") -> None:
     width, height = int(page.width), int(page.height)
     scene.clearSelection()
@@ -96,3 +115,31 @@ def export_scene_to_pdf(scene: QGraphicsScene, file_path: str, page: "Page") -> 
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
     scene.render(painter, QRectF(0, 0, width, height), _page_source_rect(page))
     painter.end()
+
+
+# Format key -> (file extension, export function) -- shared by export_all_pages
+# so the "export every page" flow reuses the exact same per-page renderers as
+# the single-page Export menu instead of a separate implementation. Defined
+# after every export_scene_to_* function above so this dict can reference
+# them directly.
+_EXPORTERS = {
+    "png": ("png", export_scene_to_png),
+    "png_transparent": ("png", lambda scene, path, page: export_scene_to_png(scene, path, page, transparent=True)),
+    "jpg": ("jpg", export_scene_to_jpg),
+    "pdf": ("pdf", export_scene_to_pdf),
+    "svg": ("svg", export_scene_to_svg),
+}
+
+
+def export_all_pages(
+    scene: QGraphicsScene, pages: list["Page"], directory: str, fmt: str, base_name: str = "design_page"
+) -> list[str]:
+    """Exports every page to its own file in `directory`, named
+    "{base_name}_{n}.{ext}" in page order. Returns the written paths."""
+    extension, export_one = _EXPORTERS[fmt]
+    paths: list[str] = []
+    for index, page in enumerate(pages, start=1):
+        file_path = str(Path(directory) / f"{base_name}_{index}.{extension}")
+        export_one(scene, file_path, page)
+        paths.append(file_path)
+    return paths

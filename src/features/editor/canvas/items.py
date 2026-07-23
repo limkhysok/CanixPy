@@ -35,6 +35,7 @@ from src.features.editor.canvas.snapping import SNAP_THRESHOLD_PX, compute_snap
 if TYPE_CHECKING:
     from src.features.editor.canvas.page import Page
     from src.features.editor.canvas.scene import DesignScene
+    from src.features.editor.canvas.undo_manager import UndoStack
 
 # Handle/rotate sizes below are target *screen* pixels, not local/scene units --
 # see _HandleMixin._device_scale(). A constant in local units would shrink to a
@@ -46,6 +47,9 @@ HANDLE_HIT_PX = 18.0  # bigger than the visible square -- forgiving without look
 ROTATE_OFFSET_PX = 24.0
 ROTATE_HIT_PX = 18.0
 MIN_SIZE = 12.0
+# Degrees a Shift-held rotate drag snaps to -- matches the Figma/Canva
+# convention of coarse-angle rotation for straightening things by feel.
+ROTATE_SNAP_DEGREES = 15.0
 
 # Fixed (not zoom-dependent) upper bound on how large the on-screen-constant
 # sizes above are allowed to grow in local units when heavily zoomed out.
@@ -93,6 +97,38 @@ def _resized_rect(start: QRectF, handle: str, delta: QPointF) -> QRectF:
     if "b" in handle:
         rect.setBottom(max(start.bottom() + delta.y(), start.top() + MIN_SIZE))
     return rect.normalized()
+
+
+def _clamp_translate(rect: QRectF, bounds: QRectF) -> QRectF:
+    """Slides rect back inside bounds (preserving its size) if it's been
+    dragged past an edge -- used for moving the crop window over a fixed
+    image (see ResizablePixmapItem._crop_mouse_move), where the crop
+    selection's size shouldn't shrink just because it neared an edge."""
+    dx = 0.0
+    if rect.left() < bounds.left():
+        dx = bounds.left() - rect.left()
+    elif rect.right() > bounds.right():
+        dx = bounds.right() - rect.right()
+    dy = 0.0
+    if rect.top() < bounds.top():
+        dy = bounds.top() - rect.top()
+    elif rect.bottom() > bounds.bottom():
+        dy = bounds.bottom() - rect.bottom()
+    return rect.translated(dx, dy)
+
+
+def _aspect_locked_rect(reference: QRectF, rect: QRectF, handle: str) -> QRectF:
+    """Re-derives rect's height from its width using reference's aspect
+    ratio, anchoring whichever top/bottom edge the drag isn't actively
+    dragging -- shared by every aspect-locked resize (see is_aspect_locked).
+    Always driven by width, so e.g. a pure vertical (top/bottom-edge) drag
+    still resizes, just proportionally."""
+    if reference.width() <= 0 or reference.height() <= 0:
+        return rect
+    width = rect.width()
+    height = width * (reference.height() / reference.width())
+    top = rect.bottom() - height if "t" in handle else rect.top()
+    return QRectF(rect.left(), top, width, height)
 
 
 # Real base is `object` (see the class docstring for why) -- this indirection
@@ -173,12 +209,15 @@ class _HandleMixin(_HandleMixinBase):
 
     def _resize_target_rect(self, rect: QRectF) -> QRectF:
         """Post-process the raw handle-driven rect before it's applied.
-        Default: identity. Override for any subclass whose resize has fewer
+        Default: identity, unless aspect lock is on (see is_aspect_locked) --
+        images are always locked; other item types can be toggled from the
+        Properties panel. Override for any subclass whose resize has fewer
         true degrees of freedom than the raw two-axis drag rect implies --
-        see ResizablePixmapItem, where passing the raw rect straight through
-        let the anchor corner drift whenever the mouse drag didn't happen to
-        exactly match the locked aspect ratio."""
-        return rect
+        see RotatableTextItem, which pins width-only and ignores the raw
+        rect's height entirely."""
+        if not is_aspect_locked(self):
+            return rect
+        return _aspect_locked_rect(self._resize_reference_rect(), rect, self._active_handle or "")
 
     def _handles_visible(self) -> bool:
         """Whether resize (and rotate, if ROTATABLE) handles currently show
@@ -334,6 +373,9 @@ class _HandleMixin(_HandleMixinBase):
         # initial placement, align/distribute, nudging, ...) that snapping
         # should leave alone.
         self._plain_dragging = True
+        scene = self._typed_scene()
+        if scene is not None:
+            scene.drag_active = True
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
@@ -342,7 +384,10 @@ class _HandleMixin(_HandleMixinBase):
             p = event.scenePos()
             angle = math.degrees(math.atan2(p.y() - center.y(), p.x() - center.x()))
             self.setTransformOriginPoint(self.local_rect().center())
-            self.setRotation(self._rotate_start_rotation + (angle - self._rotate_start_angle))
+            new_rotation = self._rotate_start_rotation + (angle - self._rotate_start_angle)
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                new_rotation = round(new_rotation / ROTATE_SNAP_DEGREES) * ROTATE_SNAP_DEGREES
+            self.setRotation(new_rotation)
             event.accept()
             return
         if self._active_handle and self._resize_start_rect is not None:
@@ -384,30 +429,48 @@ class _HandleMixin(_HandleMixinBase):
         self._plain_dragging = False
         scene = self._typed_scene()
         if scene is not None:
+            scene.drag_active = False
             scene.clear_snap_guides()
 
     # -- magnetic snap while dragging (not resizing/rotating) -------------
     def itemChange(  # noqa: N802
         self, change: QGraphicsItem.GraphicsItemChange, value: object
     ) -> object:
-        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self._plain_dragging:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
             scene = self._typed_scene()
-            # Multi-item drags move every selected item independently through
-            # this same hook with no shared leader to coordinate a common
-            # correction, so snapping only engages for a single selected item
-            # -- otherwise the group would skew apart as each item snaps to a
-            # different, slightly different offset.
-            if scene is not None and len(scene.selectedItems()) == 1:
+            if scene is not None and scene.drag_active and self.isSelected():
                 new_pos = cast(QPointF, value)
-                delta = new_pos - self.pos()
-                # self.pos() is still the pre-change position here -- Qt calls
-                # itemChange() before applying it -- so this is the item's
-                # real current on-screen rect, safe to translate by the
-                # proposed delta below (rotation/scale aren't changing).
-                proposed_rect = self.mapRectToScene(self.local_rect()).translated(delta)
-                threshold = SNAP_THRESHOLD_PX / self._device_scale()
-                dx, dy, guides = compute_snap(proposed_rect, scene.snap_targets(self), threshold)
-                scene.show_snap_guides(guides)
+                if self._plain_dragging:
+                    # The item whose mousePressEvent actually started this
+                    # drag (the "leader") computes the correction fresh, once
+                    # per move -- Qt calls itemChange() on every OTHER
+                    # selected+movable item too (each already translated by
+                    # this same raw delta, see QGraphicsItem's default
+                    # mouseMoveEvent), synchronously within this same event,
+                    # so by the time their itemChange() runs below,
+                    # scene.active_snap_delta already holds this move's
+                    # value. Sharing one correction (rather than each item
+                    # computing its own) keeps a multi-item drag translating
+                    # as one rigid body instead of skewing apart.
+                    delta = new_pos - self.pos()
+                    selected = scene.selectedItems()
+                    # self.pos()/sceneBoundingRect() are still pre-change here
+                    # -- Qt calls itemChange() before applying it -- so these
+                    # are real current on-screen rects, safe to translate by
+                    # the proposed delta below (rotation/scale aren't changing).
+                    proposed_rect = (
+                        self.mapRectToScene(self.local_rect()).translated(delta)
+                        if len(selected) == 1
+                        else scene.selection_visual_bounds(selected).translated(delta)
+                    )
+                    threshold = SNAP_THRESHOLD_PX / self._device_scale()
+                    dx, dy, guides = compute_snap(proposed_rect, scene.snap_targets(self), threshold)
+                    scene.show_snap_guides(guides)
+                    scene.active_snap_delta = (dx, dy)
+                    return new_pos + QPointF(dx, dy)
+                # A follower in this same multi-item drag -- reuse the
+                # leader's correction rather than computing its own.
+                dx, dy = scene.active_snap_delta
                 return new_pos + QPointF(dx, dy)
         return super().itemChange(change, value)
 
@@ -489,8 +552,44 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
 
     RESIZE_HANDLES = _CORNER_HANDLES
 
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        # Non-destructive crop: a sub-rect of the *native* pixmap (pixel
+        # coordinates, never scaled/rotated) that's currently visible, or
+        # None for "the whole image". The full pixmap data is always kept,
+        # so a crop can be adjusted or reset later -- see enter_crop_mode.
+        self._crop_rect: QRectF | None = None
+        self._crop_mode = False
+        self._crop_mode_start_rect: QRectF | None = None
+        self._crop_dragging = False
+        self._crop_drag_mode: str | None = None  # "resize" | "move"
+        self._crop_active_handle: str | None = None
+        self._crop_start_rect: QRectF | None = None
+        self._crop_start_pos: QPointF | None = None
+
+    @property
+    def crop_mode(self) -> bool:
+        return self._crop_mode
+
+    @property
+    def has_crop(self) -> bool:
+        return self._crop_rect is not None
+
+    @property
+    def crop_rect(self) -> QRectF | None:
+        return self._crop_rect
+
     def local_rect(self) -> QRectF:
-        return QRectF(self.pixmap().rect())
+        # Full native pixmap while actively adjusting the crop selection
+        # (see _paint_crop_mode) -- the crop rect is just an overlay on top
+        # of the whole image until committed.
+        if self._crop_mode or self._crop_rect is None:
+            return QRectF(self.pixmap().rect())
+        # Anchored at (0, 0) rather than the crop rect's own (possibly
+        # nonzero) position -- paint() draws the cropped sub-image starting
+        # at the item's local origin, matching every other local_rect()
+        # override (resize handles, boundingRect(), etc. all assume this).
+        return QRectF(0, 0, self._crop_rect.width(), self._crop_rect.height())
 
     def _resize_reference_rect(self) -> QRectF:
         return self.mapRectToScene(self.local_rect())
@@ -499,20 +598,11 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
         assert self._resize_start_scene_pos is not None
         return event.scenePos() - self._resize_start_scene_pos
 
-    def _resize_target_rect(self, rect: QRectF) -> QRectF:
-        # Aspect-locked resize has exactly one true degree of freedom, always
-        # driven by width (see _apply_resize) -- the height and whichever of
-        # top/bottom isn't the dragged edge must be re-derived from that
-        # locked aspect ratio rather than trusting the raw (possibly
-        # off-ratio) drag rect, or the anchor edge silently drifts.
-        native = self.local_rect()
-        if native.width() <= 0 or native.height() <= 0:
-            return rect
-        handle = self._active_handle or ""
-        width = rect.width()
-        height = width * (native.height() / native.width())
-        top = rect.bottom() - height if "t" in handle else rect.top()
-        return QRectF(rect.left(), top, width, height)
+    # _resize_target_rect: inherited from _HandleMixin -- images are always
+    # aspect-locked (see is_aspect_locked), so the base class's generic
+    # aspect-lock handling already does exactly what a dedicated override
+    # here used to do, driven by this class's own _resize_reference_rect()
+    # (scene coordinates, current -- possibly cropped -- aspect ratio).
 
     def _apply_resize(self, rect: QRectF) -> None:
         # `rect` is a scene rect (see _resize_reference_rect/_resize_delta
@@ -527,11 +617,194 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
         self.setPos(rect.topLeft())
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
+        if self._crop_mode:
+            self._paint_crop_mode(painter)
+            return
+        if self._crop_rect is not None:
+            painter.drawPixmap(self.local_rect(), self.pixmap(), self._crop_rect)
+            self._paint_handles(painter)
+            return
         # QGraphicsPixmapItem.paint's stub (unlike QGraphicsItem's) omits the
         # Optional here even though Qt allows a null widget -- cast rather
         # than narrow our own signature away from the real base contract.
         super().paint(painter, self._unselected_option(option), cast(QWidget, widget))
         self._paint_handles(painter)
+
+    # -- crop mode: a distinct interaction mode with its own handles that
+    # select a sub-region of the (always fully-preserved) native pixmap,
+    # entered/exited explicitly rather than via the normal resize handles --
+    # see PropertiesPanel's Image section. --------------------------------
+    def enter_crop_mode(self) -> None:
+        if self._crop_mode:
+            return
+        self.prepareGeometryChange()
+        self._crop_mode = True
+        self._crop_mode_start_rect = QRectF(self._crop_rect) if self._crop_rect is not None else None
+        if self._crop_rect is None:
+            self._crop_rect = QRectF(self.pixmap().rect())
+        self.update()
+
+    def cancel_crop(self) -> None:
+        if not self._crop_mode:
+            return
+        self.prepareGeometryChange()
+        self._crop_rect = self._crop_mode_start_rect
+        self._crop_mode = False
+        self.update()
+
+    def commit_crop(self) -> None:
+        """Applies the crop rect currently being previewed. Shifts pos() so
+        the cropped content stays exactly where it visually was during the
+        preview -- local_rect() now anchors at (0, 0) representing the
+        crop's own top-left, not the original image's (see local_rect)."""
+        if not self._crop_mode:
+            return
+        crop = self._crop_rect
+        if crop is not None and crop == QRectF(self.pixmap().rect()):
+            crop = None  # selecting the whole image is equivalent to "no crop"
+        if crop is not None:
+            scale = self.scale()
+            self.setPos(self.pos() + QPointF(crop.left() * scale, crop.top() * scale))
+        self.prepareGeometryChange()
+        self._crop_rect = crop
+        self._crop_mode = False
+        self.update()
+
+    def confirm_crop(self, undo_stack: "UndoStack") -> None:
+        """Commits the previewed crop and pushes a single undo entry for the
+        whole gesture -- called by the Properties panel's Apply button."""
+        if not self._crop_mode:
+            return
+        old_pos, old_crop = self.pos(), self._crop_mode_start_rect
+        self.commit_crop()
+        new_pos, new_crop = self.pos(), self._crop_rect
+        if old_pos == new_pos and old_crop == new_crop:
+            return
+
+        def undo() -> None:
+            self.prepareGeometryChange()
+            self.setPos(old_pos)
+            self._crop_rect = old_crop
+            self.update()
+
+        def redo() -> None:
+            self.prepareGeometryChange()
+            self.setPos(new_pos)
+            self._crop_rect = new_crop
+            self.update()
+
+        undo_stack.push(undo, redo)
+
+    def reset_crop(self, undo_stack: "UndoStack") -> None:
+        """Clears a committed crop back to the full image, undoably."""
+        if self._crop_rect is None:
+            return
+        self.enter_crop_mode()
+        self._crop_rect = QRectF(self.pixmap().rect())
+        self.confirm_crop(undo_stack)
+
+    def set_crop_rect(self, rect: QRectF | None) -> None:
+        """Restores a previously-committed crop (see persistence.py) without
+        the position shift commit_crop() does interactively -- the restored
+        pos() already accounts for it."""
+        self.prepareGeometryChange()
+        self._crop_rect = rect
+
+    def _crop_handle_positions(self) -> dict[str, QPointF]:
+        r = self._crop_rect or QRectF(self.pixmap().rect())
+        return {
+            "tl": r.topLeft(), "tm": QPointF(r.center().x(), r.top()), "tr": r.topRight(),
+            "ml": QPointF(r.left(), r.center().y()), "mr": QPointF(r.right(), r.center().y()),
+            "bl": r.bottomLeft(), "bm": QPointF(r.center().x(), r.bottom()), "br": r.bottomRight(),
+        }
+
+    def _crop_handle_at(self, local_pos: QPointF) -> str | None:
+        half = self._handle_hit_size() / 2
+        for name, pos in self._crop_handle_positions().items():
+            if abs(local_pos.x() - pos.x()) <= half and abs(local_pos.y() - pos.y()) <= half:
+                return name
+        return None
+
+    def _paint_crop_mode(self, painter: QPainter) -> None:
+        full = QRectF(self.pixmap().rect())
+        painter.drawPixmap(0, 0, self.pixmap())
+
+        crop = self._crop_rect or full
+        overlay = QColor(0, 0, 0, 130)
+        painter.fillRect(QRectF(full.left(), full.top(), full.width(), crop.top() - full.top()), overlay)
+        painter.fillRect(QRectF(full.left(), crop.bottom(), full.width(), full.bottom() - crop.bottom()), overlay)
+        painter.fillRect(QRectF(full.left(), crop.top(), crop.left() - full.left(), crop.height()), overlay)
+        painter.fillRect(QRectF(crop.right(), crop.top(), full.right() - crop.right(), crop.height()), overlay)
+
+        pen = QPen(QColor(theme.ACCENT))
+        pen.setWidth(0)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(crop)
+
+        painter.setBrush(QColor("#ffffff"))
+        handle_size = self._handle_visual_size()
+        for pos in self._crop_handle_positions().values():
+            painter.drawRect(QRectF(pos.x() - handle_size / 2, pos.y() - handle_size / 2, handle_size, handle_size))
+
+    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802
+        if self._crop_mode:
+            handle = self._crop_handle_at(event.pos())
+            self.setCursor(QCursor(_CURSOR_FOR_HANDLE[handle]) if handle else QCursor())
+            return
+        super().hoverMoveEvent(event)
+
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if self._crop_mode:
+            self._crop_mouse_press(event)
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if self._crop_mode and self._crop_dragging:
+            self._crop_mouse_move(event)
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if self._crop_mode and self._crop_dragging:
+            self._crop_dragging = False
+            self._crop_drag_mode = None
+            self._crop_active_handle = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _crop_mouse_press(self, event: QGraphicsSceneMouseEvent) -> None:
+        pos = event.pos()
+        crop = self._crop_rect or QRectF(self.pixmap().rect())
+        handle = self._crop_handle_at(pos)
+        if handle:
+            self._crop_drag_mode = "resize"
+            self._crop_active_handle = handle
+        elif crop.contains(pos):
+            self._crop_drag_mode = "move"
+            self._crop_active_handle = None
+        else:
+            event.ignore()
+            return
+        self._crop_start_rect = QRectF(crop)
+        self._crop_start_pos = pos
+        self._crop_dragging = True
+        event.accept()
+
+    def _crop_mouse_move(self, event: QGraphicsSceneMouseEvent) -> None:
+        assert self._crop_start_rect is not None and self._crop_start_pos is not None
+        delta = event.pos() - self._crop_start_pos
+        bounds = QRectF(self.pixmap().rect())
+        if self._crop_drag_mode == "resize":
+            new_rect = _resized_rect(self._crop_start_rect, self._crop_active_handle or "", delta)
+            new_rect = new_rect.intersected(bounds)
+        else:
+            new_rect = _clamp_translate(self._crop_start_rect.translated(delta), bounds)
+        self._crop_rect = new_rect
+        self.update()
+        event.accept()
 
 
 def _star_points(spikes: int = 5, inner_ratio: float = 0.4) -> list[tuple[float, float]]:
@@ -824,7 +1097,21 @@ def can_edit_height(item: QGraphicsItem) -> bool:
 
 
 def is_aspect_locked(item: QGraphicsItem) -> bool:
-    return isinstance(item, ResizablePixmapItem)
+    if isinstance(item, ResizablePixmapItem):
+        return True  # images are always aspect-locked -- no toggle offered
+    return bool(getattr(item, "aspect_locked", False))
+
+
+def set_aspect_locked(item: QGraphicsItem, locked: bool) -> None:
+    item.aspect_locked = locked  # type: ignore[attr-defined]
+
+
+def can_toggle_aspect_lock(item: QGraphicsItem) -> bool:
+    """Whether the Properties panel should offer a user-facing aspect-lock
+    toggle for this item -- images are always locked (see is_aspect_locked)
+    so a toggle would be misleading, and groups/text have no independent W/H
+    to lock a ratio between."""
+    return isinstance(item, (ResizableRectItem, ResizableEllipseItem, ResizablePolygonItem))
 
 
 def resize_item(item: QGraphicsItem, width: float, height: float) -> tuple[float, float] | None:

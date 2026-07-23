@@ -20,7 +20,7 @@ import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QGradient, QLinearGradient, QPen, QPixmap, QTextOption
 from PySide6.QtWidgets import (
     QAbstractGraphicsShapeItem,
@@ -38,10 +38,13 @@ from src.features.editor.canvas.items import (
     ResizablePolygonItem,
     ResizableRectItem,
     RotatableTextItem,
+    can_toggle_aspect_lock,
     get_layer_name,
     get_shape_kind,
+    is_aspect_locked,
     is_layer_locked,
     make_shadow_effect,
+    set_aspect_locked,
     set_layer_locked,
     set_layer_name,
     set_shape_kind,
@@ -65,6 +68,8 @@ def _common_fields(item: QGraphicsItem) -> dict[str, Any]:
         "opacity": item.opacity(),
         "shadow": item.graphicsEffect() is not None,  # type: ignore[reportUnnecessaryComparison]
     }
+    if can_toggle_aspect_lock(item) and is_aspect_locked(item):
+        fields["aspect_locked"] = True
     name = get_layer_name(item)
     if name:
         fields["name"] = name
@@ -89,6 +94,8 @@ def _apply_common_fields(item: QGraphicsItem, data: dict[str, Any]) -> None:
         set_layer_name(item, data["name"])
     if data.get("shape_kind"):
         set_shape_kind(item, data["shape_kind"])
+    if data.get("aspect_locked") and can_toggle_aspect_lock(item):
+        set_aspect_locked(item, True)
     item.setFlags(
         QGraphicsItem.GraphicsItemFlag.ItemIsMovable |
         QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
@@ -187,12 +194,16 @@ def serialize_item(item: QGraphicsItem) -> dict[str, Any] | None:
         io_device.open(QIODevice.OpenModeFlag.WriteOnly)
         item.pixmap().save(io_device, "PNG")
         io_device.close()
-        return {
+        data: dict[str, Any] = {
             "kind": "image",
             "png_base64": base64.b64encode(buffer.data()).decode("ascii"),
             "scale": item.scale(),
             **_common_fields(item),
         }
+        crop = item.crop_rect if isinstance(item, ResizablePixmapItem) else None
+        if crop is not None:
+            data["crop"] = [crop.x(), crop.y(), crop.width(), crop.height()]
+        return data
     return None
 
 
@@ -239,6 +250,9 @@ def _deserialize_image(data: dict[str, Any]) -> QGraphicsItem:
     item = ResizablePixmapItem(pixmap)
     item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
     item.setScale(data.get("scale", 1.0))
+    crop = data.get("crop")
+    if crop:
+        item.set_crop_rect(QRectF(*crop))
     return item
 
 

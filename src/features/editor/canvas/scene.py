@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from PySide6.QtCore import Qt, QLineF, QPointF, QRectF
-from PySide6.QtGui import QBrush, QColor, QFont, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPixmap
 from src.core import theme
 from src.features.editor.canvas.items import (
     PageFrameItem,
@@ -55,6 +55,15 @@ class DesignScene(QGraphicsScene):
         self.undo_stack = UndoStack(on_change=on_history_change)
         self.setBackgroundBrush(QBrush(QColor(theme.CANVAS_SURROUND)))
         self._snap_guide_items: list[QGraphicsLineItem] = []
+        # Coordinates a multi-item plain-drag's snap correction across every
+        # selected item's own itemChange call (see items.py _HandleMixin) --
+        # only the "leader" item (the one whose mousePressEvent started the
+        # drag) computes a fresh (dx, dy) each move, every other selected
+        # item just re-applies it, so the whole group translates as one
+        # rigid body instead of each item snapping independently and
+        # skewing apart.
+        self.drag_active = False
+        self.active_snap_delta: tuple[float, float] = (0.0, 0.0)
         # QGraphicsScene.addItem() doesn't keep a PySide item's underlying
         # C++ object alive on its own -- a well-known PySide/PyQt
         # QGraphicsItem gotcha -- so items added *without* going through
@@ -136,7 +145,7 @@ class DesignScene(QGraphicsScene):
     def delete_page(self, page: Page) -> None:
         if len(self.pages) <= 1:
             return  # always keep at least one page
-        for item in self._items_on_page(page):
+        for item in self.items_on_page(page):
             self.removeItem(item)
         self.removeItem(page.frame)
         self.pages.remove(page)
@@ -159,7 +168,20 @@ class DesignScene(QGraphicsScene):
     def page_frames(self) -> set[QGraphicsItem]:
         return {p.frame for p in self.pages}
 
-    def _items_on_page(self, page: Page) -> list[QGraphicsItem]:
+    def restore_page(self, page: Page, index: int, items: list[QGraphicsItem]) -> None:
+        """Re-attaches a previously-removed page (see delete_page) at its
+        original list position, together with the items that were on it --
+        the undo half of a delete_page call, and also the redo half of an
+        add/duplicate-page action's own undo entry (see EditorViewModel),
+        since "put this already-built page back" is exactly the same
+        operation either way."""
+        self.addItem(page.frame)
+        for item in items:
+            self.addItem(item)
+        self.pages.insert(min(index, len(self.pages)), page)
+        self.update_scene_rect()
+
+    def items_on_page(self, page: Page) -> list[QGraphicsItem]:
         frames = self.page_frames()
         return [
             item for item in self.items()
@@ -203,6 +225,23 @@ class DesignScene(QGraphicsScene):
             rect = other.mapRectToScene(local_rect()) if callable(local_rect) else other.sceneBoundingRect()
             targets.append(rect)
         return targets
+
+    def selection_visual_bounds(self, items: list[QGraphicsItem]) -> QRectF:
+        """Combined real (unpadded) visual bounds of `items` in scene
+        coordinates -- like _selection_bounds (used by align/distribute),
+        but via each item's local_rect() rather than sceneBoundingRect(),
+        matching snap_targets()'s own preference: sceneBoundingRect() is
+        padded out for resize/rotate-handle hit testing (see _HandleMixin),
+        which would make a snapped-to group edge visibly off from where the
+        items actually are."""
+        def visual_rect(item: QGraphicsItem) -> QRectF:
+            local_rect = getattr(item, "local_rect", None)
+            return item.mapRectToScene(local_rect()) if callable(local_rect) else item.sceneBoundingRect()
+
+        bounds = visual_rect(items[0])
+        for item in items[1:]:
+            bounds = bounds.united(visual_rect(item))
+        return bounds
 
     def show_snap_guides(self, lines: list[QLineF]) -> None:
         self.clear_snap_guides()
@@ -322,6 +361,67 @@ class DesignScene(QGraphicsScene):
             item.setZValue(min_z - len(sorted_items) + offset)
         self._push_group_z_undo(old_z, {item: item.zValue() for item in items})
 
+    def step_forward(self, items: list[QGraphicsItem]) -> None:
+        """Swaps each item with whichever other item sits immediately above
+        it in z-order -- a single step, unlike bring_items_to_front's jump to
+        the very top."""
+        self._step_z(items, direction=1)
+
+    def step_backward(self, items: list[QGraphicsItem]) -> None:
+        self._step_z(items, direction=-1)
+
+    def _z_neighbor(self, item: QGraphicsItem, others: list[QGraphicsItem], direction: int) -> QGraphicsItem | None:
+        """The other item immediately above (direction=1) or below
+        (direction=-1) `item` in z-order, or None if it's already at the
+        front/back."""
+        candidates = [i for i in others if (i.zValue() > item.zValue()) == (direction > 0)]
+        if not candidates:
+            return None
+        pick = min if direction > 0 else max
+        return pick(candidates, key=lambda i: i.zValue())
+
+    def _step_z(self, items: list[QGraphicsItem], direction: int) -> None:
+        frames = self.page_frames()
+        items = [i for i in items if i not in frames]
+        if not items:
+            return
+        # Top-most selected item moves first when stepping forward (bottom-
+        # most first when stepping backward), so a sibling that already
+        # moved this batch doesn't shift the z-order out from under the
+        # next item's neighbor search.
+        ordered = sorted(items, key=lambda i: i.zValue(), reverse=(direction > 0))
+        swaps: list[tuple[QGraphicsItem, QGraphicsItem, float, float]] = []
+        for item in ordered:
+            others = [i for i in self.items() if i not in frames and i is not item]
+            neighbor = self._z_neighbor(item, others, direction)
+            # None: item is already at the front/back. In `items`: don't hop
+            # over a sibling moving together in this same batch.
+            if neighbor is None or neighbor in items:
+                continue
+            old_item_z, old_neighbor_z = item.zValue(), neighbor.zValue()
+            item.setZValue(old_neighbor_z)
+            neighbor.setZValue(old_item_z)
+            swaps.append((item, neighbor, old_item_z, old_neighbor_z))
+        if not swaps:
+            return
+        self._push_swap_z_undo(swaps)
+        self._notify_refresh()
+
+    def _push_swap_z_undo(self, swaps: list[tuple[QGraphicsItem, QGraphicsItem, float, float]]) -> None:
+        def undo() -> None:
+            for item, neighbor, old_item_z, old_neighbor_z in swaps:
+                item.setZValue(old_item_z)
+                neighbor.setZValue(old_neighbor_z)
+            self._notify_refresh()
+
+        def redo() -> None:
+            for item, neighbor, old_item_z, old_neighbor_z in swaps:
+                item.setZValue(old_neighbor_z)
+                neighbor.setZValue(old_item_z)
+            self._notify_refresh()
+
+        self.undo_stack.push(undo, redo)
+
     def _push_group_z_undo(
         self, old_z: dict[QGraphicsItem, float], new_z: dict[QGraphicsItem, float]
     ) -> None:
@@ -435,25 +535,32 @@ class DesignScene(QGraphicsScene):
         self.undo_stack.push(undo, redo)
 
     def add_image_item(self, file_path: str, pos: QPointF) -> None:
-        from PySide6.QtCore import Qt
-
         from src.core.image_loader import load_pixmap
 
         pixmap = load_pixmap(file_path)
         if pixmap is None:
             return  # Unreadable or unsupported file
+        self._add_pixmap_item(pixmap, pos, source=file_path)
 
-        # Create a native image graphics item
+    def add_image_from_clipboard(self, pixmap: QPixmap, pos: QPointF) -> None:
+        """Pastes an image straight from the OS clipboard (e.g. a copied
+        screenshot or a browser image) -- no file path/source to track,
+        unlike add_image_item."""
+        self._add_pixmap_item(pixmap, pos)
+
+    def _add_pixmap_item(self, pixmap: QPixmap, pos: QPointF, source: str | None = None) -> None:
         item = ResizablePixmapItem(pixmap)
-        set_image_source(item, file_path)
+        if source:
+            set_image_source(item, source)
 
         # Enable smooth transformation so images don't look pixelated when scaled or zoomed
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
 
-        # Center the image relative to where it was loaded/dropped. local_rect(),
-        # not boundingRect() -- boundingRect() is padded out to reserve room for
-        # the resize/rotate handles (see items.py), which would otherwise pull
-        # the actually-visible image well off the intended drop point.
+        # Center the image relative to where it was loaded/dropped/pasted.
+        # local_rect(), not boundingRect() -- boundingRect() is padded out to
+        # reserve room for the resize/rotate handles (see items.py), which
+        # would otherwise pull the actually-visible image well off the
+        # intended drop point.
         bounds = item.local_rect()
         item.setPos(pos.x() - bounds.width() / 2, pos.y() - bounds.height() / 2)
 

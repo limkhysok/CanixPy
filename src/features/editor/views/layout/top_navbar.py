@@ -30,10 +30,14 @@ class TopNavbar(QWidget):
     back_clicked = Signal()
     undo_clicked = Signal()
     redo_clicked = Signal()
+    grid_toggled = Signal(bool)
     export_png_clicked = Signal()
     export_png_transparent_clicked = Signal()
     export_jpg_clicked = Signal()
     export_pdf_clicked = Signal()
+    export_svg_clicked = Signal()
+    # fmt is one of exporter._EXPORTERS's keys ("png"/"png_transparent"/"jpg"/"pdf"/"svg")
+    export_all_pages_clicked = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -63,6 +67,11 @@ class TopNavbar(QWidget):
         layout.addLayout(undo_redo_layout)
         layout.addStretch()
 
+        self.btn_grid = self._icon_button("fa5s.th", "Toggle Grid")
+        self.btn_grid.setCheckable(True)
+        self.btn_grid.toggled.connect(self.grid_toggled.emit)
+        layout.addWidget(self.btn_grid)
+
         btn_export = QToolButton()
         btn_export.setObjectName("exportButton")
         btn_export.setText("Export")
@@ -77,11 +86,27 @@ class TopNavbar(QWidget):
             ("PNG (Transparent)", self.export_png_transparent_clicked.emit),
             ("JPG", self.export_jpg_clicked.emit),
             ("PDF", self.export_pdf_clicked.emit),
+            ("SVG", self.export_svg_clicked.emit),
         )
         for label, handler in export_actions:
             action = QAction(label, export_menu)
             action.triggered.connect(handler)
             export_menu.addAction(action)
+
+        export_menu.addSeparator()
+        all_pages_menu = export_menu.addMenu("Export All Pages")
+        all_pages_actions = (
+            ("PNG", "png"),
+            ("PNG (Transparent)", "png_transparent"),
+            ("JPG", "jpg"),
+            ("PDF", "pdf"),
+            ("SVG", "svg"),
+        )
+        for label, fmt in all_pages_actions:
+            action = QAction(label, all_pages_menu)
+            action.triggered.connect(lambda _checked=False, f=fmt: self.export_all_pages_clicked.emit(f))
+            all_pages_menu.addAction(action)
+
         btn_export.setMenu(export_menu)
 
         export_shadow = QGraphicsDropShadowEffect(btn_export)

@@ -12,7 +12,13 @@ from src.features.editor.views.layout.left_sidebar import LeftSidebar
 from src.features.editor.views.layout.page_overlay import PageOverlayManager
 from src.features.editor.views.layout.right_sidebar import PropertiesPanel
 from src.features.editor.views.layout.top_navbar import TopNavbar
-from src.features.editor.exporter import export_scene_to_jpg, export_scene_to_pdf, export_scene_to_png
+from src.features.editor.exporter import (
+    export_all_pages,
+    export_scene_to_jpg,
+    export_scene_to_pdf,
+    export_scene_to_png,
+    export_scene_to_svg,
+)
 
 class EditorView(QMainWindow):
     back_to_home = Signal()
@@ -67,10 +73,13 @@ class EditorView(QMainWindow):
         self.top_navbar.back_clicked.connect(self.back_to_home.emit)
         self.top_navbar.undo_clicked.connect(self.undo)
         self.top_navbar.redo_clicked.connect(self.redo)
+        self.top_navbar.grid_toggled.connect(lambda checked: self.view.set_grid_visible(checked))
         self.top_navbar.export_png_clicked.connect(self.export_page_to_png)
         self.top_navbar.export_png_transparent_clicked.connect(self.export_page_to_png_transparent)
         self.top_navbar.export_jpg_clicked.connect(self.export_page_to_jpg)
         self.top_navbar.export_pdf_clicked.connect(self.export_page_to_pdf)
+        self.top_navbar.export_svg_clicked.connect(self.export_page_to_svg)
+        self.top_navbar.export_all_pages_clicked.connect(self.export_all_pages_to_folder)
 
         # --- PANEL SYSTEM SETUP ---
         self.left_panel = LeftSidebar(self.viewmodel)
@@ -293,6 +302,18 @@ class EditorView(QMainWindow):
     def export_page_to_pdf(self) -> None:
         self._export(f"design_page_{self.viewmodel.active_page_index + 1}.pdf", "PDF Document (*.pdf)", self._do_export_pdf)
 
+    def export_page_to_svg(self) -> None:
+        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.svg", "SVG Image (*.svg)", self._do_export_svg)
+
+    def export_all_pages_to_folder(self, fmt: str) -> None:
+        """Exports every page in the document to its own file in a chosen
+        folder -- unlike the single-page Export menu entries, which always
+        target only the active page."""
+        directory = QFileDialog.getExistingDirectory(self, "Export All Pages To")
+        if not directory:
+            return
+        export_all_pages(self.scene, self.scene.pages, directory, fmt)
+
     def _export(self, default_name: str, file_filter: str, do_export: Callable[[str, Page], None]) -> None:
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Page", default_name, file_filter)
         if not file_path:
@@ -313,3 +334,6 @@ class EditorView(QMainWindow):
 
     def _do_export_pdf(self, file_path: str, page: Page) -> None:
         export_scene_to_pdf(self.scene, file_path, page)
+
+    def _do_export_svg(self, file_path: str, page: Page) -> None:
+        export_scene_to_svg(self.scene, file_path, page)

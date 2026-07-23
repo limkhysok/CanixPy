@@ -6,7 +6,15 @@ from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphics
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from src.core import icons, theme
-from src.features.editor.canvas.items import MIN_SIZE, can_edit_height, get_item_size, is_aspect_locked
+from src.features.editor.canvas.items import (
+    MIN_SIZE,
+    ResizablePixmapItem,
+    can_edit_height,
+    can_toggle_aspect_lock,
+    get_item_size,
+    is_aspect_locked,
+    set_aspect_locked,
+)
 from src.features.editor.canvas.page import PAGE_MIN_SIZE
 from src.features.editor.viewmodels.properties_viewmodel import PropertiesPanelViewModel
 
@@ -34,6 +42,7 @@ SECTION_ICONS = {
     "Page": "fa5s.file-image",
     "Shape Styling": ICON_PALETTE,
     "Stroke": "fa5s.pen",
+    "Image": "fa5s.crop-alt",
     "Font Family": "fa5s.font",
     "Font Size": "fa5s.text-height",
     "Style": "fa5s.bold",
@@ -115,6 +124,9 @@ class PropertiesPanel(QWidget):
         self.setStyleSheet(RIGHT_SIDEBAR_STYLE)
         self.setFixedWidth(PANEL_WIDTH)
         self.viewmodel = PropertiesPanelViewModel()
+        # Auto-cancelled if the selection changes away from it (see
+        # inspect_selection) so an abandoned crop-in-progress never lingers.
+        self._active_crop_item: ResizablePixmapItem | None = None
 
         # Outer layout spans the whole widget (so the border-left runs the full
         # column height); dynamic inspector content lives in the nested
@@ -157,6 +169,13 @@ class PropertiesPanel(QWidget):
         self.clear_layout()
         frames = self.editor_viewmodel.scene.page_frames()
         real_items = [i for i in items if i not in frames]
+
+        if self._active_crop_item is not None and real_items != [self._active_crop_item]:
+            # Selection moved away mid-crop (clicked elsewhere, deleted the
+            # item, ...) -- an abandoned crop-in-progress would otherwise
+            # keep showing its dimmed-overlay preview with no way back to it.
+            self._active_crop_item.cancel_crop()
+            self._active_crop_item = None
 
         if not real_items:
             self.show_empty_state()
@@ -270,6 +289,9 @@ class PropertiesPanel(QWidget):
                 align_row.addWidget(btn)
             self.main_layout.addLayout(align_row)
 
+        elif isinstance(item, ResizablePixmapItem):
+            self._add_image_crop_section(item)
+
         # 3. Effects (opacity + shadow, available for every item type)
         self.main_layout.addSpacing(8)
         self._add_effects_section([item])
@@ -285,6 +307,16 @@ class PropertiesPanel(QWidget):
         btn_front = _button("fa5s.arrow-up", "Bring to Front")
         btn_front.clicked.connect(lambda: self.editor_viewmodel.scene.bring_to_front(item))
         self.main_layout.addWidget(btn_front)
+
+        btn_forward = _button("fa5s.chevron-up", "Bring Forward")
+        btn_forward.setToolTip("Bring Forward (Ctrl+])")
+        btn_forward.clicked.connect(lambda: self.editor_viewmodel.scene.step_forward([item]))
+        self.main_layout.addWidget(btn_forward)
+
+        btn_backward = _button("fa5s.chevron-down", "Send Backward")
+        btn_backward.setToolTip("Send Backward (Ctrl+[)")
+        btn_backward.clicked.connect(lambda: self.editor_viewmodel.scene.step_backward([item]))
+        self.main_layout.addWidget(btn_backward)
 
         btn_back = _button("fa5s.arrow-down", "Send to Back")
         btn_back.clicked.connect(lambda: self.editor_viewmodel.scene.send_to_back(item))
@@ -324,6 +356,16 @@ class PropertiesPanel(QWidget):
         btn_front.clicked.connect(lambda: self.editor_viewmodel.scene.bring_items_to_front(items))
         self.main_layout.addWidget(btn_front)
 
+        btn_forward = _button("fa5s.chevron-up", "Bring Forward")
+        btn_forward.setToolTip("Bring Forward (Ctrl+])")
+        btn_forward.clicked.connect(lambda: self.editor_viewmodel.scene.step_forward(items))
+        self.main_layout.addWidget(btn_forward)
+
+        btn_backward = _button("fa5s.chevron-down", "Send Backward")
+        btn_backward.setToolTip("Send Backward (Ctrl+[)")
+        btn_backward.clicked.connect(lambda: self.editor_viewmodel.scene.step_backward(items))
+        self.main_layout.addWidget(btn_backward)
+
         btn_back = _button("fa5s.arrow-down", "Send to Back")
         btn_back.clicked.connect(lambda: self.editor_viewmodel.scene.send_items_to_back(items))
         self.main_layout.addWidget(btn_back)
@@ -331,6 +373,53 @@ class PropertiesPanel(QWidget):
         btn_group = _button("fa5s.object-group", "Group")
         btn_group.clicked.connect(lambda: self.editor_viewmodel.scene.group_items(items))
         self.main_layout.addWidget(btn_group)
+
+    def _add_image_crop_section(self, item: ResizablePixmapItem) -> None:
+        self.main_layout.addWidget(_section_header("Image"))
+
+        if item.crop_mode:
+            hint = QLabel("Drag the handles to select the crop area.")
+            hint.setObjectName("hintText")
+            hint.setWordWrap(True)
+            self.main_layout.addWidget(hint)
+
+            btn_apply = _button("fa5s.check", "Apply Crop")
+            btn_apply.clicked.connect(lambda: self._confirm_crop(item))
+            self.main_layout.addWidget(btn_apply)
+
+            btn_cancel = _button("fa5s.times", "Cancel")
+            btn_cancel.clicked.connect(lambda: self._cancel_crop(item))
+            self.main_layout.addWidget(btn_cancel)
+        else:
+            btn_crop = _button("fa5s.crop-alt", "Crop Image")
+            btn_crop.clicked.connect(lambda: self._enter_crop(item))
+            self.main_layout.addWidget(btn_crop)
+
+            if item.has_crop:
+                btn_reset = _button("fa5s.undo-alt", "Reset Crop")
+                btn_reset.clicked.connect(lambda: self._reset_crop(item))
+                self.main_layout.addWidget(btn_reset)
+
+    def _enter_crop(self, item: ResizablePixmapItem) -> None:
+        item.enter_crop_mode()
+        self._active_crop_item = item
+        self.inspect_selection([item])
+
+    def _confirm_crop(self, item: ResizablePixmapItem) -> None:
+        item.confirm_crop(self.editor_viewmodel.scene.undo_stack)
+        self._active_crop_item = None
+        self.inspect_selection([item])
+        self.editor_viewmodel.scene.notify_properties_change()
+
+    def _cancel_crop(self, item: ResizablePixmapItem) -> None:
+        item.cancel_crop()
+        self._active_crop_item = None
+        self.inspect_selection([item])
+
+    def _reset_crop(self, item: ResizablePixmapItem) -> None:
+        item.reset_crop(self.editor_viewmodel.scene.undo_stack)
+        self.inspect_selection([item])
+        self.editor_viewmodel.scene.notify_properties_change()
 
     def _add_effects_section(self, items: list[QGraphicsItem]) -> None:
         self.main_layout.addWidget(_section_header("Effects"))
@@ -462,6 +551,13 @@ class PropertiesPanel(QWidget):
         size_row.addWidget(w_box)
         size_row.addWidget(h_box)
         self.main_layout.addLayout(size_row)
+
+        if can_toggle_aspect_lock(item):
+            lock_checkbox = QCheckBox("Lock aspect ratio")
+            lock_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+            lock_checkbox.setChecked(is_aspect_locked(item))
+            lock_checkbox.toggled.connect(lambda on: set_aspect_locked(item, on))
+            self.main_layout.addWidget(lock_checkbox)
 
     def inspect_page(self, scene: "DesignScene", page: "Page") -> None:
         self.clear_layout()

@@ -1,17 +1,21 @@
 from __future__ import annotations
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, cast
 from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsView, QGraphicsScene, QMenu, QMessageBox, QWidget
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import (
     QAction,
     QBrush,
     QColor,
     QContextMenuEvent,
+    QGuiApplication,
     QKeySequence,
     QMouseEvent,
     QPainter,
     QPaintEvent,
+    QPen,
+    QPixmap,
     QResizeEvent,
     QWheelEvent,
     QKeyEvent,
@@ -48,6 +52,15 @@ _ALT_CYCLE_TOLERANCE = 4
 # page's own edge/border isn't flush against the viewport frame.
 FIT_MARGIN = 40
 
+# Grid overlay (see set_grid_visible): spacing is in scene units, not screen
+# pixels, so it zooms with the content like Figma/Canva's -- but that means
+# zooming far out would otherwise cram a huge number of screen-adjacent
+# lines together, so the spacing widens by GRID_SPACING_STEP whenever it'd
+# render closer together on screen than GRID_MIN_SCREEN_PX.
+GRID_BASE_SPACING = 20.0
+GRID_MIN_SCREEN_PX = 8.0
+GRID_SPACING_STEP = 5
+
 class ZoomableGraphicsView(QGraphicsView):
     def __init__(
         self,
@@ -71,6 +84,14 @@ class ZoomableGraphicsView(QGraphicsView):
         self._alt_cycle_pos: QPointF | None = None
         self._alt_cycle_index: int = 0
         self._pressed_on_page: Page | None = None
+        # Alt+drag-duplicate (see mousePressEvent/mouseMoveEvent): armed on
+        # press when Alt+click lands on an already-selected item, then
+        # actually triggered once the drag exceeds a small movement
+        # threshold -- a plain Alt+click there still behaves like an
+        # ordinary click/drag-start instead of always duplicating.
+        self._alt_duplicate_armed = False
+        self._alt_duplicate_start: QPointF | None = None
+        self._grid_visible = False
         # Set by EditorView -- positions/rebuilds the per-page floating
         # labels every repaint. Not owned/constructed here so this view stays
         # decoupled from what the overlay UI actually is.
@@ -122,6 +143,38 @@ class ZoomableGraphicsView(QGraphicsView):
             self.fit_to_page(self._pending_fit_page)
             self._pending_fit_page = None
 
+    def set_grid_visible(self, visible: bool) -> None:
+        self._grid_visible = visible
+        self.viewport().update()
+
+    def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:  # noqa: N802
+        super().drawBackground(painter, rect)
+        if not self._grid_visible:
+            return
+        rect = QRectF(rect)
+        # Uniform scale assumed -- the view is never sheared/rotated, only
+        # panned and zoomed (see _zoom), so m11() alone is the current
+        # scene-to-screen scale factor.
+        scale = self.transform().m11()
+        spacing = GRID_BASE_SPACING
+        while spacing * scale < GRID_MIN_SCREEN_PX:
+            spacing *= GRID_SPACING_STEP
+
+        pen = QPen(QColor(theme.BORDER))
+        pen.setWidth(0)
+        painter.setPen(pen)
+
+        left = math.floor(rect.left() / spacing) * spacing
+        top = math.floor(rect.top() / spacing) * spacing
+        x = left
+        while x < rect.right():
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            x += spacing
+        y = top
+        while y < rect.bottom():
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            y += spacing
+
     def wheelEvent(self, event: QWheelEvent) -> None:
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self._zoom(ZOOM_STEP_IN if event.angleDelta().y() > 0 else ZOOM_STEP_OUT)
@@ -142,10 +195,29 @@ class ZoomableGraphicsView(QGraphicsView):
         # returns early) -- otherwise Alt+click on empty page space would
         # leave this stale from whatever the previous plain click hit.
         scene = cast(DesignScene, self.scene())
-        hit = self.itemAt(event.pos())
+        # QGraphicsView.itemAt() is typed as always returning a
+        # QGraphicsItem, but at runtime it's None when the click misses
+        # every item (e.g. empty canvas) -- same PySide6 stub inaccuracy as
+        # QGraphicsItem.scene() (see _typed_scene() in items.py).
+        hit = cast("QGraphicsItem | None", self.itemAt(event.pos()))
         self._pressed_on_page = next((p for p in scene.pages if p.frame is hit), None)
 
-        if event.button() == Qt.MouseButton.LeftButton and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+        alt_held = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+        if event.button() == Qt.MouseButton.LeftButton and alt_held:
+            frames = scene.page_frames()
+            if hit is not None and hit not in frames and hit.isSelected() and not is_layer_locked(hit):
+                # Alt-dragging an already-selected item duplicates it rather
+                # than cycling the selection below it (see
+                # _alt_click_select) -- arm the duplicate and fall through to
+                # ordinary press handling so Qt's own drag starts normally;
+                # the duplicate itself only appears once that drag actually
+                # moves (see mouseMoveEvent).
+                self._alt_duplicate_armed = True
+                self._alt_duplicate_start = event.position()
+                self._alt_cycle_pos = None
+                super().mousePressEvent(event)
+                self._snapshot_drag_start_positions()
+                return
             self._alt_click_select(event)
             return
 
@@ -153,8 +225,12 @@ class ZoomableGraphicsView(QGraphicsView):
         # later Alt+click at that same spot starts over at the topmost item
         # instead of resuming a stale cycle.
         self._alt_cycle_pos = None
+        self._alt_duplicate_armed = False
 
         super().mousePressEvent(event)
+        self._snapshot_drag_start_positions()
+
+    def _snapshot_drag_start_positions(self) -> None:
         # Snapshot positions *after* the click has updated selection, so a
         # drag starting here can be diffed against these on release. Items
         # mid-handle-resize/-rotate are excluded: those push their own
@@ -168,6 +244,26 @@ class ZoomableGraphicsView(QGraphicsView):
             for item in self.scene().selectedItems()
             if not (getattr(item, "_active_handle", None) or getattr(item, "_rotating", False))
         }
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._alt_duplicate_armed and self._alt_duplicate_start is not None:
+            moved = (event.position() - self._alt_duplicate_start).manhattanLength()
+            if moved > _ALT_CYCLE_TOLERANCE:
+                self._alt_duplicate_armed = False
+                self._perform_alt_duplicate()
+        super().mouseMoveEvent(event)
+
+    def _perform_alt_duplicate(self) -> None:
+        """Leaves an exact copy of the current selection behind at its
+        pre-drag position, then lets the drag already in progress (see
+        mousePressEvent) carry on moving the *original* items -- reuses
+        Qt's own in-progress drag instead of re-implementing item dragging,
+        and is functionally identical to the usual Alt+drag-duplicate
+        convention either way (one copy ends up moved, one stays put)."""
+        scene = cast(DesignScene, self.scene())
+        items = [i for i in scene.selectedItems() if not is_layer_locked(i)]
+        if items:
+            self.viewmodel.duplicate_items_in_place(items)
 
     def _alt_click_select(self, event: QMouseEvent) -> None:
         """Alt+click cycles through whatever is stacked at this point, one
@@ -290,14 +386,34 @@ class ZoomableGraphicsView(QGraphicsView):
                 self._on_page_properties_cleared()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
+        # Split into one method per shortcut cluster (each returns True if it
+        # consumed the event) rather than one long if/elif chain -- purely a
+        # readability/complexity split, every condition and action below is
+        # unchanged from before.
         scene = cast(DesignScene, self.scene())
+        handled = (
+            self._handle_pan_key(event)
+            or self._handle_clipboard_keys(event, scene)
+            or self._handle_duplicate_group_keys(event, scene)
+            or self._handle_nudge_keys(event)
+            or self._handle_z_order_keys(event, scene)
+            or self._handle_zoom_keys(event)
+        )
+        if not handled:
+            super().keyPressEvent(event)
+
+    def _handle_pan_key(self, event: QKeyEvent) -> bool:
         # Held Space temporarily swaps rubber-band selection for Qt's built-in
         # hand-drag panning (the Figma/Canva convention) -- isAutoRepeat()
         # guards against the OS repeating this event every few ms while the
         # key stays down, which would otherwise spam redundant mode-sets.
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-        elif event.key() == Qt.Key.Key_Escape:
+            return True
+        return False
+
+    def _handle_clipboard_keys(self, event: QKeyEvent, scene: DesignScene) -> bool:
+        if event.key() == Qt.Key.Key_Escape:
             scene.clearSelection()
         elif event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             scene.delete_items(scene.selectedItems())
@@ -307,21 +423,45 @@ class ZoomableGraphicsView(QGraphicsView):
         elif event.matches(QKeySequence.StandardKey.Copy):
             self.viewmodel.copy_selection()
         elif event.matches(QKeySequence.StandardKey.Paste):
-            self.viewmodel.paste_clipboard()
+            self._paste(scene)
         elif event.matches(QKeySequence.StandardKey.SelectAll):
             for item in scene.items():
                 if item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable:
                     item.setSelected(True)
-        elif event.key() == Qt.Key.Key_D and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        else:
+            return False
+        return True
+
+    def _handle_duplicate_group_keys(self, event: QKeyEvent, scene: DesignScene) -> bool:
+        ctrl_held = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if event.key() == Qt.Key.Key_D and ctrl_held:
             self.viewmodel.duplicate_selection()
-        elif event.key() == Qt.Key.Key_G and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                scene.ungroup_items(scene.selectedItems())
-            else:
-                scene.group_items(scene.selectedItems())
-        elif event.key() in _NUDGE_KEYS:
-            self._nudge_selection(event.key(), event.modifiers())
-        elif event.matches(QKeySequence.StandardKey.ZoomIn):
+        elif event.key() == Qt.Key.Key_G and ctrl_held and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            scene.ungroup_items(scene.selectedItems())
+        elif event.key() == Qt.Key.Key_G and ctrl_held:
+            scene.group_items(scene.selectedItems())
+        else:
+            return False
+        return True
+
+    def _handle_nudge_keys(self, event: QKeyEvent) -> bool:
+        if event.key() not in _NUDGE_KEYS:
+            return False
+        self._nudge_selection(event.key(), event.modifiers())
+        return True
+
+    def _handle_z_order_keys(self, event: QKeyEvent, scene: DesignScene) -> bool:
+        ctrl_held = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if event.key() == Qt.Key.Key_BracketRight and ctrl_held:
+            scene.step_forward(scene.selectedItems())
+        elif event.key() == Qt.Key.Key_BracketLeft and ctrl_held:
+            scene.step_backward(scene.selectedItems())
+        else:
+            return False
+        return True
+
+    def _handle_zoom_keys(self, event: QKeyEvent) -> bool:
+        if event.matches(QKeySequence.StandardKey.ZoomIn):
             self._zoom(ZOOM_STEP_IN)
         elif event.matches(QKeySequence.StandardKey.ZoomOut):
             self._zoom(ZOOM_STEP_OUT)
@@ -330,13 +470,28 @@ class ZoomableGraphicsView(QGraphicsView):
         elif event.key() == Qt.Key.Key_1 and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self._reset_zoom()
         else:
-            super().keyPressEvent(event)
+            return False
+        return True
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
             self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         else:
             super().keyReleaseEvent(event)
+
+    def _paste(self, scene: DesignScene) -> None:
+        """An image sitting on the OS clipboard (a copied screenshot, a
+        browser image, ...) takes priority over the in-app clipboard --
+        copy/cut inside the canvas never touches the OS clipboard (see
+        EditorViewModel._clipboard), so finding an image there is a strong
+        signal the user just copied it from outside the app and wants it on
+        the canvas, not whatever was last cut/copied on this canvas."""
+        clipboard_image = QGuiApplication.clipboard().image()
+        if not clipboard_image.isNull():
+            pos = self.mapToScene(self.viewport().rect().center())
+            scene.add_image_from_clipboard(QPixmap.fromImage(clipboard_image), pos)
+        else:
+            self.viewmodel.paste_clipboard()
 
     def _zoom(self, factor: float) -> None:
         self.scale(factor, factor)

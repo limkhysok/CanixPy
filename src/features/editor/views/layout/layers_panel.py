@@ -85,10 +85,41 @@ def _label_for(item: QGraphicsItem) -> str:
     return get_layer_name(item) or _default_label(item)
 
 
+class _DragHandle(QLabel):
+    """The only part of a LayerRow that initiates a reorder-drag -- keeping
+    it a separate child widget (rather than watching for drag gestures on
+    the row as a whole) keeps drag-to-reorder from fighting the row's own
+    click-to-select/double-click-to-rename handling over the rest of its
+    area."""
+
+    def __init__(self, row: "LayerRow") -> None:
+        super().__init__()
+        self.row = row
+        self.setPixmap(icons.icon("fa5s.grip-vertical", color=theme.TEXT_SECONDARY).pixmap(_ICON_SIZE, _ICON_SIZE))
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.setFixedWidth(_ICON_SIZE + 4)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.row.panel.begin_drag(self.row)
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self.row.panel.update_drag(event.globalPosition().toPoint())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.row.panel.end_drag()
+        super().mouseReleaseEvent(event)
+
+
 class LayerRow(QWidget):
-    """One row in the layers list: type icon, (renameable) name, visibility
-    toggle, lock toggle. Selecting/clicking talks to the panel rather than
-    the scene directly, so the panel can decide replace-vs-toggle semantics."""
+    """One row in the layers list: drag handle, type icon, (renameable)
+    name, visibility toggle, lock toggle. Selecting/clicking talks to the
+    panel rather than the scene directly, so the panel can decide
+    replace-vs-toggle semantics."""
 
     def __init__(self, item: QGraphicsItem, panel: "LayersPanel", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -102,6 +133,8 @@ class LayerRow(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 4, 2)
         layout.setSpacing(6)
+
+        layout.addWidget(_DragHandle(self))
 
         self.icon_label = QLabel()
         self.icon_label.setPixmap(icons.icon(_icon_for(item), color=theme.TEXT_PRIMARY).pixmap(_ICON_SIZE, _ICON_SIZE))
@@ -196,6 +229,7 @@ class LayersPanel(QWidget):
         self.viewmodel = viewmodel
         self.setStyleSheet(LAYERS_PANEL_STYLE)
         self._rows: dict[QGraphicsItem, LayerRow] = {}
+        self._dragging_row: LayerRow | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -266,3 +300,79 @@ class LayersPanel(QWidget):
         else:
             self.viewmodel.scene.clearSelection()
             item.setSelected(True)
+
+    # -- drag-to-reorder (see _DragHandle) ---------------------------------
+    def begin_drag(self, row: LayerRow) -> None:
+        self._dragging_row = row
+        row.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def update_drag(self, global_pos) -> None:
+        row = self._dragging_row
+        if row is None:
+            return
+        local_y = self.rows_container.mapFromGlobal(global_pos).y()
+        target_index = self._index_for_y(local_y, exclude=row)
+        current_index = self.rows_layout.indexOf(row)
+        if target_index != -1 and target_index != current_index:
+            self.rows_layout.removeWidget(row)
+            self.rows_layout.insertWidget(target_index, row)
+
+    def _index_for_y(self, y: int, exclude: LayerRow) -> int:
+        # Trailing stretch (see refresh()) isn't a row -- excluded from the count.
+        count = self.rows_layout.count() - 1
+        for i in range(count):
+            widget = self.rows_layout.itemAt(i).widget()
+            if widget is exclude or widget is None:
+                continue
+            midpoint = widget.geometry().y() + widget.geometry().height() / 2
+            if y < midpoint:
+                return i
+        return max(count - 1, 0)
+
+    def end_drag(self) -> None:
+        row = self._dragging_row
+        self._dragging_row = None
+        if row is None:
+            return
+        row.unsetCursor()
+        new_order = [
+            widget.item
+            for i in range(self.rows_layout.count() - 1)
+            if (widget := self.rows_layout.itemAt(i).widget()) is not None
+        ]
+        self._apply_new_order(new_order)
+
+    def _apply_new_order(self, new_order: list[QGraphicsItem]) -> None:
+        """Assigns fresh, strictly-ordered z-values matching `new_order`.
+        Items commonly share the same (default 0) z-value -- Qt then breaks
+        the tie by insertion order, not a value this panel can read back --
+        so redistributing the *existing* z-value set across the new order
+        can silently no-op. New values are picked just above every other
+        page's max z instead (z-order is scene-global, not page-scoped --
+        see DesignScene.bring_to_front), which also has the reasonable side
+        effect of bringing the reordered page's items to the very front."""
+        old_order = self._items_front_to_back()
+        if new_order == old_order:
+            self.refresh()  # snaps any half-dragged widget back into place
+            return
+        frames = self.viewmodel.scene.page_frames()
+        others_z = [
+            i.zValue() for i in self.viewmodel.scene.items()
+            if i not in frames and i not in old_order
+        ]
+        base = max(others_z) + 1 if others_z else 0.0
+        old_z = {item: item.zValue() for item in old_order}
+        new_z = {item: base + (len(new_order) - 1 - i) for i, item in enumerate(new_order)}
+
+        def undo() -> None:
+            for item, z in old_z.items():
+                item.setZValue(z)
+            self.refresh()
+
+        def redo() -> None:
+            for item, z in new_z.items():
+                item.setZValue(z)
+            self.refresh()
+
+        redo()
+        self.viewmodel.scene.undo_stack.push(undo, redo)
