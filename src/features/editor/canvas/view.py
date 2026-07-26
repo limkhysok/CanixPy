@@ -92,6 +92,14 @@ class ZoomableGraphicsView(QGraphicsView):
         self._alt_duplicate_armed = False
         self._alt_duplicate_start: QPointF | None = None
         self._grid_visible = False
+        # Toggled by the H key (see _handle_pan_key) -- unlike held-Space
+        # panning, this stays in ScrollHandDrag mode until H is pressed again,
+        # so the user can pan by dragging anywhere without holding a key.
+        self._hand_tool_active = False
+        self._space_held = False
+        # Tracks an in-progress manual pan drag (see mousePressEvent) --
+        # None when not currently panning.
+        self._pan_last_pos: QPoint | None = None
         # Set by EditorView -- positions/rebuilds the per-page floating
         # labels every repaint. Not owned/constructed here so this view stays
         # decoupled from what the overlay UI actually is.
@@ -191,6 +199,18 @@ class ZoomableGraphicsView(QGraphicsView):
             self.page_overlay_manager.sync(self)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        # Panning (H-toggled hand tool or held Space) is handled entirely by
+        # hand here rather than via Qt's built-in ScrollHandDrag, because
+        # Qt only starts its own hand-drag when the click lands on empty
+        # canvas -- a click over any selectable/movable item (a page, an
+        # image, ...) gets accepted by that item first, so relying on the
+        # built-in mechanism alone would only pan when clicking bare canvas.
+        if self._is_panning() and event.button() == Qt.MouseButton.LeftButton:
+            self._pan_last_pos = event.pos()
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
         # Computed unconditionally, before the Alt-click branch (which
         # returns early) -- otherwise Alt+click on empty page space would
         # leave this stale from whatever the previous plain click hit.
@@ -246,6 +266,15 @@ class ZoomableGraphicsView(QGraphicsView):
         }
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._pan_last_pos is not None:
+            delta = event.pos() - self._pan_last_pos
+            self._pan_last_pos = event.pos()
+            h_bar = self.horizontalScrollBar()
+            v_bar = self.verticalScrollBar()
+            h_bar.setValue(h_bar.value() - delta.x())
+            v_bar.setValue(v_bar.value() - delta.y())
+            event.accept()
+            return
         if self._alt_duplicate_armed and self._alt_duplicate_start is not None:
             moved = (event.position() - self._alt_duplicate_start).manhattanLength()
             if moved > _ALT_CYCLE_TOLERANCE:
@@ -367,6 +396,14 @@ class ZoomableGraphicsView(QGraphicsView):
         QMessageBox.information(self, title, "\n".join(lines))
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._pan_last_pos is not None and event.button() == Qt.MouseButton.LeftButton:
+            self._pan_last_pos = None
+            self.viewport().setCursor(
+                Qt.CursorShape.OpenHandCursor if self._is_panning() else Qt.CursorShape.ArrowCursor
+            )
+            event.accept()
+            return
+
         super().mouseReleaseEvent(event)
         moved = {
             item: (old_pos, item.pos())
@@ -402,13 +439,32 @@ class ZoomableGraphicsView(QGraphicsView):
         if not handled:
             super().keyPressEvent(event)
 
+    def _is_panning(self) -> bool:
+        return self._hand_tool_active or self._space_held
+
+    def _apply_pan_state(self) -> None:
+        # ScrollHandDrag is set only for its side effect of swapping in Qt's
+        # automatic Open/Closed-hand cursor -- the actual panning is done by
+        # hand (see mousePressEvent/mouseMoveEvent), since Qt's own built-in
+        # hand-drag only fires when the click lands on empty canvas.
+        self.setDragMode(
+            QGraphicsView.DragMode.ScrollHandDrag if self._is_panning() else QGraphicsView.DragMode.RubberBandDrag
+        )
+
     def _handle_pan_key(self, event: QKeyEvent) -> bool:
+        # H toggles a persistent hand tool (Figma/Canva convention): drag
+        # anywhere to pan without holding a key, until H is pressed again.
+        if event.key() == Qt.Key.Key_H and not event.isAutoRepeat():
+            self._hand_tool_active = not self._hand_tool_active
+            self._apply_pan_state()
+            return True
         # Held Space temporarily swaps rubber-band selection for Qt's built-in
-        # hand-drag panning (the Figma/Canva convention) -- isAutoRepeat()
-        # guards against the OS repeating this event every few ms while the
-        # key stays down, which would otherwise spam redundant mode-sets.
+        # hand-drag panning -- isAutoRepeat() guards against the OS repeating
+        # this event every few ms while the key stays down, which would
+        # otherwise spam redundant mode-sets.
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+            self._space_held = True
+            self._apply_pan_state()
             return True
         return False
 
@@ -475,7 +531,8 @@ class ZoomableGraphicsView(QGraphicsView):
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
-            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+            self._space_held = False
+            self._apply_pan_state()
         else:
             super().keyReleaseEvent(event)
 

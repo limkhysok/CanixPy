@@ -27,7 +27,10 @@ from src.features.editor.canvas.undo_manager import UndoStack
 # Scene-unit padding kept independent of view.py's FIT_MARGIN (a related but
 # distinct concept -- zoom-fit padding, not scene-rect padding) to avoid a
 # circular import (view.py already imports DesignScene from this module).
-SCENE_RECT_MARGIN = 40
+# Wide enough to give the hand tool/held-Space pan (see view.py) real room to
+# move in every direction -- a thin margin would let the scrollbars' range
+# clamp panning almost immediately past the page edge.
+SCENE_RECT_MARGIN = 400
 # Extra bottom padding so the last page can be scrolled fully into view /
 # centered rather than pinned flush against the scrollable limit.
 SCROLL_END_MARGIN = 400
