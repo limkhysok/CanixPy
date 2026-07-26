@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtGui import QFontDatabase
 
 FONTS_DIR = Path(__file__).resolve().parents[2] / "assets" / "fonts"
+BUNDLED_FONT_FAMILY = "League Spartan"
 
 
 def load_app_fonts() -> list[str]:
@@ -27,3 +28,11 @@ def load_app_fonts() -> list[str]:
                 families.append(family)
 
     return families
+
+
+def default_font_family() -> str:
+    """The family new text should default to -- the bundled font if it made
+    it into Qt's font database (see load_app_fonts), else a safe fallback."""
+    if BUNDLED_FONT_FAMILY in QFontDatabase.families():
+        return BUNDLED_FONT_FAMILY
+    return "Arial"

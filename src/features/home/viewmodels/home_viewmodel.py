@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from src.core.image_loader import load_pixmap
 from src.core.paths import PROJECTS_DIR, sanitize_filename
@@ -67,7 +67,7 @@ class HomeViewModel:
         "YouTube",
     )
 
-    PRESETS: list[CanvasPreset] = [
+    PRESETS: ClassVar[list[CanvasPreset]] = [
         # Popular -- curated cross-platform picks plus general-purpose sizes.
         CanvasPreset("Default", 800, 600, "Popular"),
         CanvasPreset("Instagram Post (Square)", 1080, 1080, "Popular"),
@@ -241,7 +241,7 @@ class HomeViewModel:
         for task in self.tasks:
             if task.id == task_id:
                 task.name = name
-                task.modified_at = datetime.now()
+                task.modified_at = datetime.now().astimezone()
                 self._write_task(task)
                 return
 
@@ -251,7 +251,7 @@ class HomeViewModel:
         for task in self.tasks:
             if task.id == task_id:
                 task.content = content
-                task.modified_at = datetime.now()
+                task.modified_at = datetime.now().astimezone()
                 self._write_task(task)
                 return
 

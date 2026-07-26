@@ -1,10 +1,10 @@
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtWidgets import QGraphicsScene
-from PySide6.QtGui import QBrush, QImage, QPageSize, QPainter, QPdfWriter, QPixmap
 from PySide6.QtCore import QMarginsF, QRectF, QSize, QSizeF, Qt
+from PySide6.QtGui import QBrush, QImage, QPageSize, QPainter, QPdfWriter, QPixmap
 from PySide6.QtSvg import QSvgGenerator
+from PySide6.QtWidgets import QGraphicsScene
 
 if TYPE_CHECKING:
     from src.features.editor.canvas.page import Page

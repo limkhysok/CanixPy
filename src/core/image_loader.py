@@ -83,7 +83,9 @@ def _load_pdf_page(file_path: str) -> QPixmap | None:
                 return None
             page = document.load_page(0)
             png_bytes = page.get_pixmap(dpi=_PDF_RENDER_DPI).tobytes("png")
-    except Exception:
+    # Malformed PDFs raise unpredictable fitz-internal errors -- any failure
+    # here means "can't preview this file", not a bug to surface.
+    except Exception:  # noqa: BLE001
         return None
 
     image = QImage.fromData(png_bytes, "PNG")
@@ -98,7 +100,9 @@ def _load_psd(file_path: str) -> QPixmap | None:
 
     try:
         composite = PSDImage.open(file_path).composite()
-    except Exception:
+    # Malformed .psd files raise unpredictable psd_tools-internal errors --
+    # any failure here means "can't preview this file", not a bug to surface.
+    except Exception:  # noqa: BLE001
         return None
     if composite is None:
         return None
@@ -122,7 +126,9 @@ def _load_via_pillow(file_path: str) -> QPixmap | None:
     try:
         with Image.open(file_path) as pil_image:
             return _pil_to_pixmap(pil_image)
-    except Exception:
+    # Malformed image files raise unpredictable Pillow-internal errors -- any
+    # failure here means "can't preview this file", not a bug to surface.
+    except Exception:  # noqa: BLE001
         return None
 
 

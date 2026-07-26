@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from math import gcd
 from pathlib import Path
-from typing import Callable
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (

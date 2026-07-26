@@ -1,15 +1,21 @@
 from __future__ import annotations
+
 import math
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, cast
-from PySide6.QtWidgets import QFrame, QGraphicsItem, QGraphicsView, QGraphicsScene, QMenu, QMessageBox, QWidget
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from typing import TYPE_CHECKING, cast
+
+from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QBrush,
     QColor,
     QContextMenuEvent,
+    QDragEnterEvent,
+    QDragMoveEvent,
+    QDropEvent,
     QGuiApplication,
+    QKeyEvent,
     QKeySequence,
     QMouseEvent,
     QPainter,
@@ -18,13 +24,25 @@ from PySide6.QtGui import (
     QPixmap,
     QResizeEvent,
     QWheelEvent,
-    QKeyEvent,
-    QDragEnterEvent,
-    QDragMoveEvent,
-    QDropEvent,
 )
+from PySide6.QtWidgets import (
+    QFrame,
+    QGraphicsItem,
+    QGraphicsScene,
+    QGraphicsView,
+    QMenu,
+    QMessageBox,
+    QWidget,
+)
+
 from src.core import icons, theme
-from src.features.editor.canvas.items import ResizablePixmapItem, get_image_source, is_layer_locked, set_layer_locked
+from src.features.editor.canvas.items import (
+    ResizablePixmapItem,
+    RotatableTextItem,
+    get_image_source,
+    is_layer_locked,
+    set_layer_locked,
+)
 from src.features.editor.canvas.page import Page
 from src.features.editor.canvas.scene import DesignScene
 
@@ -65,7 +83,7 @@ class ZoomableGraphicsView(QGraphicsView):
     def __init__(
         self,
         scene: QGraphicsScene,
-        viewmodel: "EditorViewModel",
+        viewmodel: EditorViewModel,
         on_refresh: Callable[[], None],
         on_properties_change: Callable[[], None],
         on_selection_sync: Callable[[], None],
@@ -103,7 +121,7 @@ class ZoomableGraphicsView(QGraphicsView):
         # Set by EditorView -- positions/rebuilds the per-page floating
         # labels every repaint. Not owned/constructed here so this view stays
         # decoupled from what the overlay UI actually is.
-        self.page_overlay_manager: "PageOverlayManager | None" = None
+        self.page_overlay_manager: PageOverlayManager | None = None
         # The viewport has no real size yet at construction time (layout
         # hasn't run), so the initial fit-to-page has to wait for the first
         # resize that actually gives it one.
@@ -145,7 +163,7 @@ class ZoomableGraphicsView(QGraphicsView):
         else:
             self._pending_fit_page = page
 
-    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         if self._pending_fit_page is not None and self.viewport().width() > 0 and self.viewport().height() > 0:
             self.fit_to_page(self._pending_fit_page)
@@ -155,7 +173,7 @@ class ZoomableGraphicsView(QGraphicsView):
         self._grid_visible = visible
         self.viewport().update()
 
-    def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:  # noqa: N802
+    def drawBackground(self, painter: QPainter, rect: QRectF | QRect) -> None:
         super().drawBackground(painter, rect)
         if not self._grid_visible:
             return
@@ -189,7 +207,7 @@ class ZoomableGraphicsView(QGraphicsView):
         else:
             super().wheelEvent(event)
 
-    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+    def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
         # Resyncing after every repaint (rather than hooking every individual
         # cause -- zoom, pan, resize, page add/delete/move/resize, ...) keeps
@@ -413,7 +431,11 @@ class ZoomableGraphicsView(QGraphicsView):
         self._drag_start_positions = {}
         if moved:
             cast(DesignScene, self.scene()).push_move_undo(moved)
-            self._on_properties_change()
+            # A drag can carry an item across a page boundary (page
+            # membership is derived from position, never stored -- see
+            # page_for_item), so a full refresh is needed here, not just the
+            # Properties panel, to keep the Layers panel's page grouping current.
+            QTimer.singleShot(0, self._on_refresh)
 
         scene = cast(DesignScene, self.scene())
         if not scene.selectedItems():
@@ -422,12 +444,29 @@ class ZoomableGraphicsView(QGraphicsView):
             else:
                 self._on_page_properties_cleared()
 
+    def _is_editing_text(self, scene: DesignScene) -> bool:
+        focus_item = scene.focusItem()
+        return (
+            isinstance(focus_item, RotatableTextItem)
+            and focus_item.textInteractionFlags() != Qt.TextInteractionFlag.NoTextInteraction
+        )
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         # Split into one method per shortcut cluster (each returns True if it
         # consumed the event) rather than one long if/elif chain -- purely a
         # readability/complexity split, every condition and action below is
         # unchanged from before.
         scene = cast(DesignScene, self.scene())
+        if self._is_editing_text(scene):
+            # A text item is mid-edit (double-clicked into edit mode -- see
+            # RotatableTextItem.mouseDoubleClickEvent -- and holding keyboard
+            # focus): every key needs to reach its own text-cursor handling
+            # instead of the canvas-level shortcuts below, which would
+            # otherwise delete the whole item on Delete, select every item on
+            # Ctrl+A, nudge the box on arrow keys, etc. instead of editing
+            # the text itself.
+            super().keyPressEvent(event)
+            return
         handled = (
             self._handle_pan_key(event)
             or self._handle_clipboard_keys(event, scene)
@@ -574,6 +613,7 @@ class ZoomableGraphicsView(QGraphicsView):
             item.setPos(item.pos().x() + dx * step, item.pos().y() + dy * step)
         moved = {item: (old_positions[item], item.pos()) for item in items}
         scene.push_move_undo(moved)
+        self._on_refresh()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasText():

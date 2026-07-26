@@ -1,19 +1,23 @@
 from __future__ import annotations
-from typing import Callable
+
+from collections.abc import Callable
+
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
+from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
+    QGraphicsItem,
     QGraphicsItemGroup,
     QGraphicsLineItem,
     QGraphicsScene,
-    QGraphicsItem,
     QWidget,
 )
-from PySide6.QtCore import Qt, QLineF, QPointF, QRectF
-from PySide6.QtGui import QBrush, QColor, QFont, QPen, QPixmap
+
 from src.core import theme
+from src.core.fonts import default_font_family
 from src.features.editor.canvas.items import (
-    PageFrameItem,
     POLYGON_TEMPLATES,
+    PageFrameItem,
     ResizableEllipseItem,
     ResizablePixmapItem,
     ResizablePolygonItem,
@@ -82,6 +86,12 @@ class DesignScene(QGraphicsScene):
     def _notify_refresh(self) -> None:
         if self.on_refresh is not None:
             self.on_refresh()
+
+    def notify_refresh(self) -> None:
+        """Public entry point for callers outside this class (see items.py
+        PageFrameItem.mouseReleaseEvent) -- internal call sites within this
+        class use _notify_refresh() directly."""
+        self._notify_refresh()
 
     def notify_properties_change(self) -> None:
         if self.on_properties_change is not None:
@@ -293,10 +303,11 @@ class DesignScene(QGraphicsScene):
         text: str,
         pos: QPointF,
         font: QFont | None = None,
-    ) -> None:
+        color: QColor | None = None,
+    ) -> RotatableTextItem:
         item = RotatableTextItem(text)
-        item.setFont(font or QFont("Arial", 16))
-        item.setDefaultTextColor(QColor("#2c3e50"))
+        item.setFont(font or QFont(default_font_family(), 16))
+        item.setDefaultTextColor(color or QColor("#2c3e50"))
         # Starts non-editable so a single click selects/drags it like any
         # other item; RotatableTextItem switches into edit mode on double-click.
         item.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -312,6 +323,7 @@ class DesignScene(QGraphicsScene):
             QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
         )
         self._add_item_with_undo(item)
+        return item
 
     # --- NEW LAYER MANAGEMENT FEATURES ---
     def bring_to_front(self, item: QGraphicsItem) -> None:
@@ -689,12 +701,18 @@ class DesignScene(QGraphicsScene):
         self.undo_stack.push(undo, do)
 
     def push_move_undo(self, moved: dict[QGraphicsItem, tuple[QPointF, QPointF]]) -> None:
+        # A move can carry an item across a page boundary -- which page it
+        # belongs to is derived from position, never stored (see
+        # page_for_item) -- so undo/redo needs a full refresh, not just a
+        # position change, to keep the Layers panel's page grouping in sync.
         def undo() -> None:
             for item, (old_pos, _new_pos) in moved.items():
                 item.setPos(old_pos)
+            self._notify_refresh()
 
         def redo() -> None:
             for item, (_old_pos, new_pos) in moved.items():
                 item.setPos(new_pos)
+            self._notify_refresh()
 
         self.undo_stack.push(undo, redo)

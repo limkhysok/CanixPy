@@ -6,7 +6,7 @@ is drawn along the shared coordinate -- the usual Figma/Canva/PowerPoint
 """
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from PySide6.QtCore import QLineF, QRectF
 

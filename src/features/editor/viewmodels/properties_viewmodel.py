@@ -1,17 +1,31 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QGradient,
+    QLinearGradient,
+    QPen,
+    QTextOption,
+)
 from PySide6.QtWidgets import (
     QColorDialog,
+    QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsRectItem,
     QGraphicsTextItem,
 )
-from PySide6.QtCore import QPointF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QGradient, QLinearGradient, QPen, QTextOption
 
 from src.features.editor.canvas import items
-from src.features.editor.canvas.items import make_shadow_effect
+from src.features.editor.canvas.items import (
+    SHADOW_BLUR,
+    SHADOW_COLOR,
+    SHADOW_OFFSET,
+    make_shadow_effect,
+)
 from src.features.editor.canvas.undo_manager import UndoStack
 
 if TYPE_CHECKING:
@@ -97,6 +111,43 @@ class PropertiesPanelViewModel:
         apply(enabled)
         undo_stack.push(lambda: apply(had_shadow), lambda: apply(enabled))
 
+    def _shadow_params(self, item: QGraphicsItem) -> tuple[QColor, float, tuple[float, float]]:
+        effect = item.graphicsEffect()
+        if isinstance(effect, QGraphicsDropShadowEffect):
+            return QColor(effect.color()), effect.blurRadius(), (effect.xOffset(), effect.yOffset())
+        return QColor(SHADOW_COLOR), SHADOW_BLUR, SHADOW_OFFSET
+
+    def set_shadow_color(self, item: QGraphicsItem, undo_stack: UndoStack) -> None:
+        old_color, blur, offset = self._shadow_params(item)
+        color = QColorDialog.getColor(old_color)
+        if not color.isValid():
+            return
+
+        def apply(c: QColor) -> None:
+            item.setGraphicsEffect(make_shadow_effect(c, blur, offset))
+
+        apply(color)
+        undo_stack.push(lambda: apply(old_color), lambda: apply(color))
+
+    def set_shadow_blur(self, item: QGraphicsItem, blur: float, undo_stack: UndoStack) -> None:
+        color, old_blur, offset = self._shadow_params(item)
+
+        def apply(b: float) -> None:
+            item.setGraphicsEffect(make_shadow_effect(color, b, offset))
+
+        apply(blur)
+        undo_stack.push(lambda: apply(old_blur), lambda: apply(blur))
+
+    def set_shadow_offset(self, item: QGraphicsItem, dx: float, dy: float, undo_stack: UndoStack) -> None:
+        color, blur, old_offset = self._shadow_params(item)
+        new_offset = (dx, dy)
+
+        def apply(offset: tuple[float, float]) -> None:
+            item.setGraphicsEffect(make_shadow_effect(color, blur, offset))
+
+        apply(new_offset)
+        undo_stack.push(lambda: apply(old_offset), lambda: apply(new_offset))
+
     def toggle_shadow_multi(self, items: list[QGraphicsItem], enabled: bool, undo_stack: UndoStack) -> None:
         had_shadow = {item: item.graphicsEffect() is not None for item in items}
 
@@ -150,6 +201,48 @@ class PropertiesPanelViewModel:
         item.setFont(new_font)
         undo_stack.push(lambda: item.setFont(old_font), lambda: item.setFont(new_font))
 
+    def apply_text_style(self, item: QGraphicsTextItem, style: dict[str, Any], undo_stack: UndoStack) -> None:
+        """Applies a saved text style (see LeftSidebar's Texts panel) as one
+        grouped undo step, rather than one step per field."""
+        old_font = QFont(item.font())
+        old_color = item.defaultTextColor()
+        old_letter_spacing = items.get_text_letter_spacing(item)
+        old_line_height = items.get_text_line_height(item)
+
+        new_font = QFont(style.get("font_family", old_font.family()), style.get("font_size", old_font.pointSize()))
+        new_font.setBold(style.get("bold", False))
+        new_font.setItalic(style.get("italic", False))
+        new_font.setUnderline(style.get("underline", False))
+        new_color = QColor(style.get("color", old_color.name()))
+        new_letter_spacing = style.get("letter_spacing", 0.0)
+        new_line_height = style.get("line_height", 100.0)
+
+        def apply(font: QFont, color: QColor, letter_spacing: float, line_height: float) -> None:
+            item.setFont(font)
+            item.setDefaultTextColor(color)
+            items.set_text_letter_spacing(item, letter_spacing)
+            items.set_text_line_height(item, line_height)
+
+        apply(new_font, new_color, new_letter_spacing, new_line_height)
+        undo_stack.push(
+            lambda: apply(old_font, old_color, old_letter_spacing, old_line_height),
+            lambda: apply(new_font, new_color, new_letter_spacing, new_line_height),
+        )
+
+    def set_letter_spacing(self, item: QGraphicsTextItem, px: float, undo_stack: UndoStack) -> None:
+        old_px = items.get_text_letter_spacing(item)
+        items.set_text_letter_spacing(item, px)
+        undo_stack.push(
+            lambda: items.set_text_letter_spacing(item, old_px), lambda: items.set_text_letter_spacing(item, px)
+        )
+
+    def set_line_height(self, item: QGraphicsTextItem, percent: float, undo_stack: UndoStack) -> None:
+        old_percent = items.get_text_line_height(item)
+        items.set_text_line_height(item, percent)
+        undo_stack.push(
+            lambda: items.set_text_line_height(item, old_percent), lambda: items.set_text_line_height(item, percent)
+        )
+
     def set_text_alignment(self, item: QGraphicsTextItem, alignment: Qt.AlignmentFlag, undo_stack: UndoStack) -> None:
         # Alignment only has visible effect once the text box has an explicit
         # wrap width -- default it to the current rendered width so alignment
@@ -168,6 +261,104 @@ class PropertiesPanelViewModel:
 
         apply(new_option)
         undo_stack.push(lambda: apply(old_option), lambda: apply(new_option))
+
+    # -- multi-select batch text editing -- same capture-old/apply-new/push-
+    # once pattern as set_opacity_multi/toggle_shadow_multi above, so every
+    # field changed while several text items are selected is one undo step.
+    def change_text_font_multi(self, items_: list[QGraphicsTextItem], font: QFont, undo_stack: UndoStack) -> None:
+        old_fonts = {item: QFont(item.font()) for item in items_}
+
+        def apply(fonts: dict[QGraphicsTextItem, QFont] | QFont) -> None:
+            for item in items_:
+                new_font = fonts if isinstance(fonts, QFont) else fonts[item]
+                current = QFont(item.font())
+                current.setFamily(new_font.family())
+                item.setFont(current)
+
+        apply(font)
+        undo_stack.push(lambda: apply(old_fonts), lambda: apply(font))
+
+    def change_text_size_multi(self, items_: list[QGraphicsTextItem], size: int, undo_stack: UndoStack) -> None:
+        old_fonts = {item: QFont(item.font()) for item in items_}
+
+        def apply(fonts: dict[QGraphicsTextItem, QFont] | int) -> None:
+            for item in items_:
+                current = QFont(item.font())
+                current.setPointSize(fonts if isinstance(fonts, int) else fonts[item].pointSize())
+                item.setFont(current)
+
+        apply(size)
+        undo_stack.push(lambda: apply(old_fonts), lambda: apply(size))
+
+    def change_text_color_multi(self, items_: list[QGraphicsTextItem], undo_stack: UndoStack) -> None:
+        old_colors = {item: item.defaultTextColor() for item in items_}
+        color = QColorDialog.getColor()
+        if not color.isValid():
+            return
+
+        def apply(colors: dict[QGraphicsTextItem, QColor] | QColor) -> None:
+            for item in items_:
+                item.setDefaultTextColor(colors if isinstance(colors, QColor) else colors[item])
+
+        apply(color)
+        undo_stack.push(lambda: apply(old_colors), lambda: apply(color))
+
+    def toggle_text_bold_multi(self, items_: list[QGraphicsTextItem], bold: bool, undo_stack: UndoStack) -> None:
+        old_fonts = {item: QFont(item.font()) for item in items_}
+
+        def apply(fonts: dict[QGraphicsTextItem, QFont] | bool) -> None:
+            for item in items_:
+                current = QFont(item.font())
+                current.setBold(fonts if isinstance(fonts, bool) else fonts[item].bold())
+                item.setFont(current)
+
+        apply(bold)
+        undo_stack.push(lambda: apply(old_fonts), lambda: apply(bold))
+
+    def toggle_text_italic_multi(self, items_: list[QGraphicsTextItem], italic: bool, undo_stack: UndoStack) -> None:
+        old_fonts = {item: QFont(item.font()) for item in items_}
+
+        def apply(fonts: dict[QGraphicsTextItem, QFont] | bool) -> None:
+            for item in items_:
+                current = QFont(item.font())
+                current.setItalic(fonts if isinstance(fonts, bool) else fonts[item].italic())
+                item.setFont(current)
+
+        apply(italic)
+        undo_stack.push(lambda: apply(old_fonts), lambda: apply(italic))
+
+    def toggle_text_underline_multi(self, items_: list[QGraphicsTextItem], underline: bool, undo_stack: UndoStack) -> None:
+        old_fonts = {item: QFont(item.font()) for item in items_}
+
+        def apply(fonts: dict[QGraphicsTextItem, QFont] | bool) -> None:
+            for item in items_:
+                current = QFont(item.font())
+                current.setUnderline(fonts if isinstance(fonts, bool) else fonts[item].underline())
+                item.setFont(current)
+
+        apply(underline)
+        undo_stack.push(lambda: apply(old_fonts), lambda: apply(underline))
+
+    def set_text_alignment_multi(
+        self, items_: list[QGraphicsTextItem], alignment: Qt.AlignmentFlag, undo_stack: UndoStack
+    ) -> None:
+        for item in items_:
+            if item.textWidth() < 0:
+                item.setTextWidth(item.boundingRect().width())
+        old_options = {item: QTextOption(item.document().defaultTextOption()) for item in items_}
+
+        def apply(options: dict[QGraphicsTextItem, QTextOption] | Qt.AlignmentFlag) -> None:
+            for item in items_:
+                if isinstance(options, Qt.AlignmentFlag):
+                    option = QTextOption(item.document().defaultTextOption())
+                    option.setAlignment(options)
+                else:
+                    option = options[item]
+                item.document().setDefaultTextOption(option)
+                item.update()
+
+        apply(alignment)
+        undo_stack.push(lambda: apply(old_options), lambda: apply(alignment))
 
     def set_item_position(self, item: QGraphicsItem, x: float, y: float, undo_stack: UndoStack) -> None:
         old_pos = item.pos()

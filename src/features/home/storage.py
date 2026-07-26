@@ -51,13 +51,22 @@ def task_to_dict(task: Task) -> dict[str, Any]:
     }
 
 
+def _parse_timestamp(value: str) -> datetime:
+    """Parses a stored ISO timestamp, upgrading pre-existing naive ones
+    (written before Task started storing timezone-aware datetimes) to aware
+    by assuming they already were local time -- astimezone() on a naive
+    datetime does exactly that without changing the wall-clock value."""
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo is not None else parsed.astimezone()
+
+
 def task_from_dict(data: dict[str, Any]) -> Task:
     width, height = data["canvas_size"]
     return Task(
         name=data["name"],
         canvas_size=(int(width), int(height)),
-        created_at=datetime.fromisoformat(data["created_at"]),
-        modified_at=datetime.fromisoformat(data["modified_at"]),
+        created_at=_parse_timestamp(data["created_at"]),
+        modified_at=_parse_timestamp(data["modified_at"]),
         file_path=data.get("file_path"),
         original_filename=data.get("original_filename"),
         file_type=data.get("file_type"),

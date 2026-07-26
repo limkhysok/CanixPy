@@ -130,7 +130,7 @@ class _RecentTaskCard(QWidget):
 
 def _format_relative_time(when: datetime) -> str:
     """Humanize a timestamp relative to now, e.g. '5 minutes ago'."""
-    seconds = max(0, (datetime.now() - when).total_seconds())
+    seconds = max(0, (datetime.now().astimezone() - when).total_seconds())
 
     if seconds < 60:
         return "Just now"

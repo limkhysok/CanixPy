@@ -1,17 +1,21 @@
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import shiboken6
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QFileDialog, QGraphicsItem, QHBoxLayout, QMainWindow, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QGraphicsItem,
+    QHBoxLayout,
+    QMainWindow,
+    QVBoxLayout,
+    QWidget,
+)
+
 from src.features.editor import persistence
 from src.features.editor.canvas.page import Page, page_for_item
 from src.features.editor.canvas.view import ZoomableGraphicsView
-from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
-from src.features.editor.views.layout.left_sidebar import LeftSidebar
-from src.features.editor.views.layout.page_overlay import PageOverlayManager
-from src.features.editor.views.layout.right_sidebar import PropertiesPanel
-from src.features.editor.views.layout.top_navbar import TopNavbar
 from src.features.editor.exporter import (
     export_all_pages,
     export_scene_to_jpg,
@@ -19,6 +23,12 @@ from src.features.editor.exporter import (
     export_scene_to_png,
     export_scene_to_svg,
 )
+from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
+from src.features.editor.views.layout.left_sidebar import LeftSidebar
+from src.features.editor.views.layout.page_overlay import PageOverlayManager
+from src.features.editor.views.layout.right_sidebar import PropertiesPanel
+from src.features.editor.views.layout.top_navbar import TopNavbar
+
 
 class EditorView(QMainWindow):
     back_to_home = Signal()
@@ -216,6 +226,7 @@ class EditorView(QMainWindow):
         self._sync_active_page_from_selection()
         self.update_properties_panel()
         self.left_panel.layers_panel.refresh()
+        self.left_panel.refresh_texts_panel()
         self.update_history_buttons()
 
     def sync_editor_selection(self) -> None:
@@ -225,6 +236,7 @@ class EditorView(QMainWindow):
         self._sync_active_page_from_selection()
         self.update_properties_panel()
         self.left_panel.layers_panel.sync_selection()
+        self.left_panel.refresh_texts_panel()
 
     def update_history_buttons(self) -> None:
         self.top_navbar.set_history_enabled(self.scene.undo_stack.can_undo(), self.scene.undo_stack.can_redo())

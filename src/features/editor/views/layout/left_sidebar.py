@@ -1,11 +1,17 @@
 from __future__ import annotations
+
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from PySide6.QtCore import QMimeData, QPointF, QSize, Qt
+from PySide6.QtGui import QColor, QDrag, QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QLayout,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -14,10 +20,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import Qt, QSize, QPointF, QMimeData
-from PySide6.QtGui import QDrag, QFont
+
 from src.core import icons, theme
+from src.core.fonts import default_font_family
 from src.core.image_loader import IMPORT_FILE_FILTER
+from src.features.editor.canvas import items
+from src.features.editor.canvas.items import RotatableTextItem
+from src.features.editor.viewmodels.properties_viewmodel import PropertiesPanelViewModel
 from src.features.editor.views.layout.layers_panel import LayersPanel
 
 if TYPE_CHECKING:
@@ -76,6 +85,21 @@ def _section_header(text: str) -> QWidget:
     row_layout.addWidget(text_label)
     row_layout.addStretch()
     return row
+
+
+def _clear_qlayout(layout: QLayout) -> None:
+    # See right_sidebar.py's identical helper -- takeAt() detaches
+    # immediately and nested button-row layouts need recursing into too,
+    # otherwise their child widgets stay floating on screen post-rebuild.
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget:
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
+        elif item.layout():
+            _clear_qlayout(item.layout())
 
 
 class DraggableListWidget(QListWidget):
@@ -146,9 +170,14 @@ class NavRailButton(QToolButton):
 
 # Wrap the nav rail and the swappable content panel into a clean Sidebar Widget
 class LeftSidebar(QWidget):
-    def __init__(self, viewmodel: "EditorViewModel", parent: QWidget | None = None) -> None:
+    def __init__(self, viewmodel: EditorViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.viewmodel = viewmodel
+        # Item-property mutation helpers (same class right_sidebar.py's
+        # Properties panel uses) -- reused here so "apply saved style" goes
+        # through the one grouped, undo-tracked mutation path rather than
+        # left_sidebar reaching into item internals directly.
+        self._properties_vm = PropertiesPanelViewModel()
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(LEFT_SIDEBAR_STYLE)
 
@@ -221,29 +250,124 @@ class LeftSidebar(QWidget):
 
     def _build_texts_page(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
-        layout.addWidget(_section_header("Text Styles"))
+        self.texts_layout = QVBoxLayout(page)
+        self.texts_layout.setContentsMargins(16, 16, 16, 16)
+        self.texts_layout.setSpacing(8)
+        self._populate_texts_page()
+        return page
+
+    def refresh_texts_panel(self) -> None:
+        """Rebuilds the Texts page in place -- called whenever saved styles
+        or the selection change (see EditorView.refresh_editor_panels /
+        sync_editor_selection), since the "Save current style as..." button's
+        enabled state and the Saved Styles list both depend on that."""
+        if hasattr(self, "texts_layout"):
+            self._populate_texts_page()
+
+    def _populate_texts_page(self) -> None:
+        _clear_qlayout(self.texts_layout)
+
+        self.texts_layout.addWidget(_section_header("Text Styles"))
         for button_label, text, size, bold in TEXT_PRESETS:
             btn = QPushButton(icons.icon(FONT_ICON), button_label)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(
                 lambda _checked=False, t=text, s=size, b=bold: self.add_text_preset(t, s, b)
             )
-            layout.addWidget(btn)
-        layout.addStretch()
-        return page
+            self.texts_layout.addWidget(btn)
 
-    def add_text_preset(self, text: str, size: int, bold: bool) -> None:
-        font = QFont("Arial", size)
-        font.setBold(bold)
+        self.texts_layout.addSpacing(8)
+        self.texts_layout.addWidget(_section_header("Saved Styles"))
+        if not self.viewmodel.text_styles:
+            hint = QLabel("No saved styles yet -- select a text box and use \"Save current style as...\" below.")
+            hint.setObjectName("placeholderText")
+            hint.setWordWrap(True)
+            self.texts_layout.addWidget(hint)
+        for index, style in enumerate(self.viewmodel.text_styles):
+            row = QHBoxLayout()
+            btn = QPushButton(icons.icon(FONT_ICON), style.get("name", "Style"))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _checked=False, s=style: self.apply_text_style(s))
+            row.addWidget(btn, 1)
+            btn_delete = QToolButton()
+            btn_delete.setIcon(icons.icon("fa5s.times", color=theme.TEXT_SECONDARY))
+            btn_delete.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_delete.setToolTip("Delete style")
+            btn_delete.clicked.connect(lambda _checked=False, i=index: self.delete_text_style(i))
+            row.addWidget(btn_delete)
+            self.texts_layout.addLayout(row)
+
+        self.texts_layout.addSpacing(8)
+        btn_save = QPushButton(icons.icon("fa5s.save"), "Save current style as...")
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_save.setEnabled(self._single_selected_text_item() is not None)
+        btn_save.clicked.connect(self.save_current_style)
+        self.texts_layout.addWidget(btn_save)
+
+        self.texts_layout.addStretch()
+
+    def _single_selected_text_item(self) -> RotatableTextItem | None:
+        selected = self.viewmodel.scene.selectedItems()
+        if len(selected) == 1 and isinstance(selected[0], RotatableTextItem):
+            return selected[0]
+        return None
+
+    def _active_page_center(self) -> QPointF:
         # Center of the active page -- not a fixed scene point, since with
         # multiple pages stacked in one scrollable canvas that could land
         # the item on whichever page happens to sit at that coordinate.
         page = self.viewmodel.active_page
-        center_point = QPointF(page.x_offset + page.width / 2, page.y_offset + page.height / 2)
-        self.viewmodel.scene.add_text_item(text, center_point, font)
+        return QPointF(page.x_offset + page.width / 2, page.y_offset + page.height / 2)
+
+    def add_text_preset(self, text: str, size: int, bold: bool) -> None:
+        font = QFont(default_font_family(), size)
+        font.setBold(bold)
+        self.viewmodel.scene.add_text_item(text, self._active_page_center(), font)
+
+    def apply_text_style(self, style: dict[str, Any]) -> None:
+        item = self._single_selected_text_item()
+        if item is not None:
+            self._properties_vm.apply_text_style(item, style, self.viewmodel.scene.undo_stack)
+            return
+        # No text selected -- insert a new text item carrying the style,
+        # same drop point as a preset (see add_text_preset above).
+        font = QFont(style.get("font_family", default_font_family()), style.get("font_size", 16))
+        font.setBold(style.get("bold", False))
+        font.setItalic(style.get("italic", False))
+        font.setUnderline(style.get("underline", False))
+        color = QColor(style.get("color", "#2c3e50"))
+        new_item = self.viewmodel.scene.add_text_item(
+            "Double Click to Edit", self._active_page_center(), font, color
+        )
+        items.set_text_letter_spacing(new_item, style.get("letter_spacing", 0.0))
+        items.set_text_line_height(new_item, style.get("line_height", 100.0))
+
+    def save_current_style(self) -> None:
+        item = self._single_selected_text_item()
+        if item is None:
+            return
+        name, ok = QInputDialog.getText(self, "Save Text Style", "Style name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        font = item.font()
+        style = {
+            "name": name,
+            "font_family": font.family(),
+            "font_size": font.pointSize(),
+            "bold": font.bold(),
+            "italic": font.italic(),
+            "underline": font.underline(),
+            "color": item.defaultTextColor().name(),
+            "letter_spacing": items.get_text_letter_spacing(item),
+            "line_height": items.get_text_line_height(item),
+        }
+        self.viewmodel.add_text_style(style)
+        self._populate_texts_page()
+
+    def delete_text_style(self, index: int) -> None:
+        self.viewmodel.remove_text_style(index)
+        self._populate_texts_page()
 
     def _build_upload_page(self) -> QWidget:
         page = QWidget()

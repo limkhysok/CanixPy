@@ -21,8 +21,14 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import icons, theme
-from src.features.editor.canvas.items import ResizablePolygonItem, get_layer_name, is_layer_locked, set_layer_locked, set_layer_name
-from src.features.editor.canvas.page import page_for_item
+from src.features.editor.canvas.items import (
+    ResizablePolygonItem,
+    get_layer_name,
+    is_layer_locked,
+    set_layer_locked,
+    set_layer_name,
+)
+from src.features.editor.canvas.page import Page, page_for_item
 
 if TYPE_CHECKING:
     from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
@@ -46,6 +52,7 @@ _MAX_LABEL_LEN = 18
 _ROW_HEIGHT = 30
 _ICON_SIZE = 14
 _TOGGLE_SIZE = 20
+_INDENT_STEP = 16
 
 LAYERS_PANEL_STYLE = theme.load_qss(Path(__file__).with_name("layers_panel.qss"))
 
@@ -92,24 +99,24 @@ class _DragHandle(QLabel):
     click-to-select/double-click-to-rename handling over the rest of its
     area."""
 
-    def __init__(self, row: "LayerRow") -> None:
+    def __init__(self, row: LayerRow) -> None:
         super().__init__()
         self.row = row
         self.setPixmap(icons.icon("fa5s.grip-vertical", color=theme.TEXT_SECONDARY).pixmap(_ICON_SIZE, _ICON_SIZE))
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFixedWidth(_ICON_SIZE + 4)
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.row.panel.begin_drag(self.row)
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event) -> None:
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.row.panel.update_drag(event.globalPosition().toPoint())
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.row.panel.end_drag()
         super().mouseReleaseEvent(event)
@@ -119,22 +126,53 @@ class LayerRow(QWidget):
     """One row in the layers list: drag handle, type icon, (renameable)
     name, visibility toggle, lock toggle. Selecting/clicking talks to the
     panel rather than the scene directly, so the panel can decide
-    replace-vs-toggle semantics."""
+    replace-vs-toggle semantics.
 
-    def __init__(self, item: QGraphicsItem, panel: "LayersPanel", parent: QWidget | None = None) -> None:
+    `page` and `depth` place this row in the tree: `page` is which page's
+    block it lives under (needed to scope reordering to that page -- see
+    LayersPanel.end_drag), and `depth` is 1 for an item sitting directly on
+    the page and 2+ for a group's nested children, indented one step per
+    level. Only depth-1 rows get a drag handle -- reordering inside a group
+    isn't supported here, so nested rows render as a plain read-only tree."""
+
+    def __init__(
+        self, item: QGraphicsItem, panel: LayersPanel, page: Page, depth: int, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self.item = item
         self.panel = panel
+        self.page = page
+        self.depth = depth
         self.setObjectName("layerRow")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(_ROW_HEIGHT)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 2, 4, 2)
+        layout.setContentsMargins(6 + depth * _INDENT_STEP, 2, 4, 2)
         layout.setSpacing(6)
 
-        layout.addWidget(_DragHandle(self))
+        if depth == 1:
+            layout.addWidget(_DragHandle(self))
+        else:
+            spacer = QLabel()
+            spacer.setFixedWidth(_ICON_SIZE + 4)
+            layout.addWidget(spacer)
+
+        has_children = isinstance(item, QGraphicsItemGroup) and bool(item.childItems())
+        if has_children:
+            self.expand_btn = QPushButton()
+            self.expand_btn.setObjectName("layerToggle")
+            self.expand_btn.setFixedSize(_TOGGLE_SIZE, _TOGGLE_SIZE)
+            self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            collapsed = item in panel._collapsed_groups
+            self.expand_btn.setIcon(icons.icon("fa5s.chevron-right" if collapsed else "fa5s.chevron-down", color=theme.TEXT_SECONDARY))
+            self.expand_btn.clicked.connect(lambda: panel.toggle_group_collapsed(item))
+            layout.addWidget(self.expand_btn)
+        else:
+            spacer = QLabel()
+            spacer.setFixedWidth(_TOGGLE_SIZE)
+            layout.addWidget(spacer)
 
         self.icon_label = QLabel()
         self.icon_label.setPixmap(icons.icon(_icon_for(item), color=theme.TEXT_PRIMARY).pixmap(_ICON_SIZE, _ICON_SIZE))
@@ -184,12 +222,12 @@ class LayerRow(QWidget):
     def refresh_label(self) -> None:
         self.name_label.setText(_label_for(self.item))
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event) -> None:
         toggle = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         self.panel.select_item(self.item, toggle=toggle)
         super().mousePressEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+    def mouseDoubleClickEvent(self, event) -> None:
         self._start_rename()
         super().mouseDoubleClickEvent(event)
 
@@ -220,16 +258,107 @@ class LayerRow(QWidget):
         self.panel.sync_selection()
 
 
-class LayersPanel(QWidget):
-    """Lists items on the current page, front-most first, and keeps the
-    canvas selection in sync in both directions."""
+class PageRow(QWidget):
+    """Header row for one page in the Layers tree -- every page is listed
+    (not just the active one), so the items nested under it always have a
+    parent to render under. Click to make it the active page (see
+    EditorViewModel.active_page); double-click to rename; the chevron
+    collapses/expands its items without changing which page is active."""
 
-    def __init__(self, viewmodel: "EditorViewModel", parent: QWidget | None = None) -> None:
+    def __init__(self, page: Page, panel: LayersPanel, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.page = page
+        self.panel = panel
+        self.setObjectName("pageRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedHeight(_ROW_HEIGHT)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 4, 2)
+        layout.setSpacing(6)
+
+        self.expand_btn = QPushButton()
+        self.expand_btn.setObjectName("layerToggle")
+        self.expand_btn.setFixedSize(_TOGGLE_SIZE, _TOGGLE_SIZE)
+        self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.expand_btn.clicked.connect(lambda: panel.toggle_page_collapsed(page))
+        layout.addWidget(self.expand_btn)
+
+        self.icon_label = QLabel()
+        self.icon_label.setPixmap(icons.icon("fa5s.file", color=theme.TEXT_PRIMARY).pixmap(_ICON_SIZE, _ICON_SIZE))
+        layout.addWidget(self.icon_label)
+
+        self.name_label = QLabel()
+        self.name_label.setObjectName("layerName")
+        bold_font = self.name_label.font()
+        bold_font.setBold(True)
+        self.name_label.setFont(bold_font)
+        layout.addWidget(self.name_label, 1)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setVisible(False)
+        self.name_edit.editingFinished.connect(self._commit_rename)
+        layout.addWidget(self.name_edit, 1)
+
+        self.refresh_label()
+        self._refresh_expand_icon()
+
+    def refresh_label(self) -> None:
+        index = self.panel.viewmodel.scene.pages.index(self.page)
+        self.name_label.setText(self.page.name or f"Page {index + 1}")
+
+    def _refresh_expand_icon(self) -> None:
+        collapsed = self.page in self.panel._collapsed_pages
+        self.expand_btn.setIcon(icons.icon("fa5s.chevron-right" if collapsed else "fa5s.chevron-down", color=theme.TEXT_SECONDARY))
+
+    def set_active(self, active: bool) -> None:
+        self.setProperty("selected", active)
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+
+    def mousePressEvent(self, event) -> None:
+        self.panel.activate_page(self.page)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self._start_rename()
+        super().mouseDoubleClickEvent(event)
+
+    def _start_rename(self) -> None:
+        self.name_edit.setText(self.name_label.text())
+        self.name_label.setVisible(False)
+        self.name_edit.setVisible(True)
+        self.name_edit.setFocus()
+        self.name_edit.selectAll()
+
+    def _commit_rename(self) -> None:
+        if not self.name_edit.isVisible():
+            return
+        new_name = self.name_edit.text().strip()
+        if new_name:
+            self.panel.viewmodel.rename_page(self.page, new_name)
+        self.name_edit.setVisible(False)
+        self.name_label.setVisible(True)
+        self.refresh_label()
+
+
+class LayersPanel(QWidget):
+    """Tree of every page in the document, each listing its own items
+    front-most first with grouped items nested under their group, and
+    keeps the canvas selection in sync in both directions."""
+
+    def __init__(self, viewmodel: EditorViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.viewmodel = viewmodel
         self.setStyleSheet(LAYERS_PANEL_STYLE)
         self._rows: dict[QGraphicsItem, LayerRow] = {}
+        self._page_rows: dict[Page, PageRow] = {}
+        self._collapsed_pages: set[Page] = set()
+        self._collapsed_groups: set[QGraphicsItem] = set()
         self._dragging_row: LayerRow | None = None
+        self._drag_subtree: list[LayerRow] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -248,22 +377,20 @@ class LayersPanel(QWidget):
         self.scroll_area.setWidget(self.rows_container)
         layout.addWidget(self.scroll_area, 1)
 
-        self.empty_hint = QLabel("Nothing on this page yet — drag a shape onto the canvas.")
+        self.empty_hint = QLabel("Nothing in this project yet — drag a shape onto the canvas.")
         self.empty_hint.setObjectName("hintText")
         self.empty_hint.setWordWrap(True)
         layout.addWidget(self.empty_hint)
 
-    def _items_front_to_back(self) -> list[QGraphicsItem]:
+    def _items_front_to_back(self, page: Page) -> list[QGraphicsItem]:
         scene = self.viewmodel.scene
         frames = scene.page_frames()
-        active_page = self.viewmodel.active_page
-        # Scoped to the active page only -- every page is visible at once
-        # now, so an unscoped list would mix unrelated pages' contents.
         # Grouped children are reachable only through their group -- listing
-        # them separately would duplicate the group's contents as top-level rows.
+        # them separately here would duplicate the group's contents as
+        # top-level rows (they're added as nested rows in refresh() instead).
         items = [
             i for i in scene.items()
-            if i not in frames and i.parentItem() is None and page_for_item(scene.pages, i) is active_page
+            if i not in frames and i.parentItem() is None and page_for_item(scene.pages, i) is page
         ]
         items.sort(key=lambda i: i.zValue(), reverse=True)
         return items
@@ -276,21 +403,54 @@ class LayersPanel(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
 
-        items = self._items_front_to_back()
         self._rows = {}
-        for item in items:
-            row = LayerRow(item, self)
-            self.rows_layout.insertWidget(self.rows_layout.count() - 1, row)
-            self._rows[item] = row
+        self._page_rows = {}
+        for page in self.viewmodel.scene.pages:
+            page_row = PageRow(page, self)
+            self.rows_layout.insertWidget(self.rows_layout.count() - 1, page_row)
+            self._page_rows[page] = page_row
+            if page in self._collapsed_pages:
+                continue
+            for item in self._items_front_to_back(page):
+                self._add_item_row(item, page, depth=1)
 
         self.sync_selection()
-        self.scroll_area.setVisible(bool(items))
-        self.empty_hint.setVisible(not items)
+        self.empty_hint.setVisible(not self._rows)
+
+    def _add_item_row(self, item: QGraphicsItem, page: Page, depth: int) -> None:
+        row = LayerRow(item, self, page, depth)
+        self.rows_layout.insertWidget(self.rows_layout.count() - 1, row)
+        self._rows[item] = row
+        if isinstance(item, QGraphicsItemGroup) and item not in self._collapsed_groups:
+            children = sorted(item.childItems(), key=lambda i: i.zValue(), reverse=True)
+            for child in children:
+                self._add_item_row(child, page, depth + 1)
+
+    def toggle_page_collapsed(self, page: Page) -> None:
+        if page in self._collapsed_pages:
+            self._collapsed_pages.discard(page)
+        else:
+            self._collapsed_pages.add(page)
+        self.refresh()
+
+    def toggle_group_collapsed(self, item: QGraphicsItem) -> None:
+        if item in self._collapsed_groups:
+            self._collapsed_groups.discard(item)
+        else:
+            self._collapsed_groups.add(item)
+        self.refresh()
+
+    def activate_page(self, page: Page) -> None:
+        self.viewmodel.set_active_page(page)
+        self.sync_selection()
 
     def sync_selection(self) -> None:
         selected = set(self.viewmodel.scene.selectedItems())
         for item, row in self._rows.items():
             row.set_selected(item in selected)
+        active_page = self.viewmodel.active_page
+        for page, row in self._page_rows.items():
+            row.set_active(page is active_page)
 
     def select_item(self, item: QGraphicsItem, toggle: bool) -> None:
         if is_layer_locked(item):
@@ -302,47 +462,76 @@ class LayersPanel(QWidget):
             item.setSelected(True)
 
     # -- drag-to-reorder (see _DragHandle) ---------------------------------
+    # Only depth-1 rows (items sitting directly on a page) are draggable,
+    # and only among their own page's other depth-1 rows -- z-order is
+    # scene-global but reordering across pages or into/out of a group isn't
+    # a supported gesture here. A dragged group's nested rows (deeper depth,
+    # immediately following it) ride along as one block so the tree doesn't
+    # visually separate a group from its own children mid-drag.
     def begin_drag(self, row: LayerRow) -> None:
+        if row.depth != 1:
+            return
         self._dragging_row = row
+        self._drag_subtree = self._subtree_widgets(row)
         row.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _subtree_widgets(self, row: LayerRow) -> list[LayerRow]:
+        widgets = [row]
+        index = self.rows_layout.indexOf(row)
+        count = self.rows_layout.count() - 1  # exclude trailing stretch
+        for i in range(index + 1, count):
+            widget = self.rows_layout.itemAt(i).widget()
+            if not isinstance(widget, LayerRow) or widget.depth <= row.depth:
+                break
+            widgets.append(widget)
+        return widgets
 
     def update_drag(self, global_pos) -> None:
         row = self._dragging_row
         if row is None:
             return
         local_y = self.rows_container.mapFromGlobal(global_pos).y()
-        target_index = self._index_for_y(local_y, exclude=row)
-        current_index = self.rows_layout.indexOf(row)
+        target_index = self._index_for_y(local_y, row)
+        subtree = self._drag_subtree
+        current_index = self.rows_layout.indexOf(subtree[0])
         if target_index != -1 and target_index != current_index:
-            self.rows_layout.removeWidget(row)
-            self.rows_layout.insertWidget(target_index, row)
+            for widget in subtree:
+                self.rows_layout.removeWidget(widget)
+            for offset, widget in enumerate(subtree):
+                self.rows_layout.insertWidget(target_index + offset, widget)
 
-    def _index_for_y(self, y: int, exclude: LayerRow) -> int:
-        # Trailing stretch (see refresh()) isn't a row -- excluded from the count.
-        count = self.rows_layout.count() - 1
+    def _index_for_y(self, y: int, row: LayerRow) -> int:
+        dragged_ids = {id(widget) for widget in self._drag_subtree}
+        count = self.rows_layout.count() - 1  # exclude trailing stretch
+        fallback = self.rows_layout.indexOf(self._page_rows[row.page]) + 1
         for i in range(count):
             widget = self.rows_layout.itemAt(i).widget()
-            if widget is exclude or widget is None:
+            if id(widget) in dragged_ids:
+                continue
+            if not (isinstance(widget, LayerRow) and widget.depth == 1 and widget.page is row.page):
                 continue
             midpoint = widget.geometry().y() + widget.geometry().height() / 2
             if y < midpoint:
                 return i
-        return max(count - 1, 0)
+            fallback = i + 1
+        return fallback
 
     def end_drag(self) -> None:
         row = self._dragging_row
         self._dragging_row = None
+        self._drag_subtree = []
         if row is None:
             return
         row.unsetCursor()
         new_order = [
             widget.item
             for i in range(self.rows_layout.count() - 1)
-            if (widget := self.rows_layout.itemAt(i).widget()) is not None
+            if isinstance(widget := self.rows_layout.itemAt(i).widget(), LayerRow)
+            and widget.depth == 1 and widget.page is row.page
         ]
-        self._apply_new_order(new_order)
+        self._apply_new_order(row.page, new_order)
 
-    def _apply_new_order(self, new_order: list[QGraphicsItem]) -> None:
+    def _apply_new_order(self, page: Page, new_order: list[QGraphicsItem]) -> None:
         """Assigns fresh, strictly-ordered z-values matching `new_order`.
         Items commonly share the same (default 0) z-value -- Qt then breaks
         the tie by insertion order, not a value this panel can read back --
@@ -351,7 +540,7 @@ class LayersPanel(QWidget):
         page's max z instead (z-order is scene-global, not page-scoped --
         see DesignScene.bring_to_front), which also has the reasonable side
         effect of bringing the reordered page's items to the very front."""
-        old_order = self._items_front_to_back()
+        old_order = self._items_front_to_back(page)
         if new_order == old_order:
             self.refresh()  # snaps any half-dragged widget back into place
             return

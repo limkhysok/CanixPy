@@ -9,10 +9,22 @@ subclasses, not wrappers.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Callable, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
 
 from PySide6.QtCore import QPointF, QRectF, QSizeF, Qt
-from PySide6.QtGui import QColor, QCursor, QFocusEvent, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QFocusEvent,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QTextBlockFormat,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
@@ -65,13 +77,48 @@ SHADOW_OFFSET = (0, 4)
 SHADOW_COLOR = QColor(0, 0, 0, 110)
 
 
-def make_shadow_effect() -> QGraphicsDropShadowEffect:
-    """Shared shadow recipe so every item's drop-shadow toggle looks the same."""
+def make_shadow_effect(
+    color: QColor = SHADOW_COLOR,
+    blur: float = SHADOW_BLUR,
+    offset: tuple[float, float] = SHADOW_OFFSET,
+) -> QGraphicsDropShadowEffect:
+    """Shared shadow recipe so every item's drop-shadow toggle looks the same
+    by default, while still letting the Properties panel customize an
+    individual item's shadow (see PropertiesPanelViewModel.set_shadow_*)."""
     effect = QGraphicsDropShadowEffect()
-    effect.setBlurRadius(SHADOW_BLUR)
-    effect.setOffset(*SHADOW_OFFSET)
-    effect.setColor(SHADOW_COLOR)
+    effect.setBlurRadius(blur)
+    effect.setOffset(*offset)
+    effect.setColor(color)
     return effect
+
+
+# -- letter spacing / line height (Properties panel text controls) --------
+# Free functions (not methods) matching the get_item_size()/resize_item()
+# convention above -- right_sidebar.py/properties_viewmodel.py read/write
+# through these rather than reaching into QFont/QTextCursor APIs directly.
+def get_text_letter_spacing(item: QGraphicsTextItem) -> float:
+    return item.font().letterSpacing()
+
+
+def set_text_letter_spacing(item: QGraphicsTextItem, px: float) -> None:
+    font = QFont(item.font())
+    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, px)
+    item.setFont(font)
+
+
+def get_text_line_height(item: QGraphicsTextItem) -> float:
+    block_format = item.document().firstBlock().blockFormat()
+    if block_format.lineHeightType() == QTextBlockFormat.LineHeightTypes.ProportionalHeight.value:
+        return block_format.lineHeight()
+    return 100.0
+
+
+def set_text_line_height(item: QGraphicsTextItem, percent: float) -> None:
+    cursor = QTextCursor(item.document())
+    cursor.select(QTextCursor.SelectionType.Document)
+    block_format = QTextBlockFormat()
+    block_format.setLineHeight(percent, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+    cursor.mergeBlockFormat(block_format)
 
 # Corner handles resize both axes; edge handles resize one axis.
 _ALL_HANDLES = ("tl", "tm", "tr", "ml", "mr", "bl", "bm", "br")
@@ -172,7 +219,7 @@ class _HandleMixin(_HandleMixinBase):
         self._rotate_start_rotation = 0.0
         self._plain_dragging = False
 
-    def _typed_scene(self) -> "DesignScene | None":
+    def _typed_scene(self) -> DesignScene | None:
         # QGraphicsItem.scene() is typed as always returning a QGraphicsScene,
         # but at runtime it's None until the item is actually added to one --
         # this narrows to the app's real DesignScene subclass everywhere
@@ -228,12 +275,12 @@ class _HandleMixin(_HandleMixinBase):
         DesignScene._create_frame's docstring)."""
         return self.isSelected()
 
-    def boundingRect(self) -> QRectF:  # noqa: N802 (Qt override)
+    def boundingRect(self) -> QRectF:
         # Fixed worst-case margin -- see _MAX_LOCAL_HANDLE_HIT/_MAX_LOCAL_ROTATE_REACH.
         pad = _MAX_LOCAL_HANDLE_HIT + _MAX_LOCAL_ROTATE_REACH
         return self.local_rect().adjusted(-pad, -pad, pad, pad)
 
-    def shape(self) -> QPainterPath:  # noqa: N802 (Qt override)
+    def shape(self) -> QPainterPath:
         # Qt's default shape() is just boundingRect() as a rectangle -- with a
         # fixed generous pad in boundingRect() that would make empty canvas
         # space near any item clickable. Return the real silhouette instead,
@@ -312,14 +359,19 @@ class _HandleMixin(_HandleMixinBase):
 
     # -- painting ---------------------------------------------------------
     def _unselected_option(self, option: QStyleOptionGraphicsItem) -> QStyleOptionGraphicsItem:
-        """Strip State_Selected before delegating to the stock item's
-        paint(). Every stock QGraphics*Item class draws its own black/white
-        dashed selection rectangle whenever this flag is set; this app draws
-        its own accent-colored handles instead (see _paint_handles), so
-        without stripping the flag both would be drawn on top of each
-        other."""
+        """Strip State_Selected and State_HasFocus before delegating to the
+        stock item's paint(). Every stock QGraphics*Item class draws its own
+        black/white dashed selection rectangle whenever State_Selected is
+        set; this app draws its own accent-colored handles instead (see
+        _paint_handles), so without stripping it both would be drawn on top
+        of each other. QGraphicsTextItem additionally draws a dotted
+        PE_FrameFocusRect around its *entire* (handle-padded) boundingRect
+        whenever State_HasFocus is set -- true throughout text editing, since
+        RotatableTextItem.mouseDoubleClickEvent calls setFocus() to enter
+        edit mode -- which otherwise shows as a big dotted box around the
+        text box the whole time it's being edited."""
         stripped = QStyleOptionGraphicsItem(option)
-        stripped.state &= ~QStyle.StateFlag.State_Selected  # type: ignore[attr-defined]
+        stripped.state &= ~(QStyle.StateFlag.State_Selected | QStyle.StateFlag.State_HasFocus)  # type: ignore[attr-defined]
         return stripped
 
     def _paint_handles(self, painter: QPainter) -> None:
@@ -341,13 +393,13 @@ class _HandleMixin(_HandleMixinBase):
             painter.drawRect(QRectF(pos.x() - handle_size / 2, pos.y() - handle_size / 2, handle_size, handle_size))
 
     # -- hover / cursor -----------------------------------------------------
-    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802
+    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:
         handle = self._handle_at(event.pos()) if self._handles_visible() else None
         self.setCursor(QCursor(_CURSOR_FOR_HANDLE[handle]) if handle else QCursor())
         super().hoverMoveEvent(event)
 
     # -- mouse: resize / rotate, falling back to normal move/select -----
-    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._handles_visible():
             handle = self._handle_at(event.pos())
             if handle == "rotate":
@@ -378,7 +430,7 @@ class _HandleMixin(_HandleMixinBase):
             scene.drag_active = True
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._rotating:
             center = self.mapToScene(self.local_rect().center())
             p = event.scenePos()
@@ -400,7 +452,7 @@ class _HandleMixin(_HandleMixinBase):
             return
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._rotating:
             self._rotating = False
             new_rotation = self.rotation()
@@ -433,7 +485,7 @@ class _HandleMixin(_HandleMixinBase):
             scene.clear_snap_guides()
 
     # -- magnetic snap while dragging (not resizing/rotating) -------------
-    def itemChange(  # noqa: N802
+    def itemChange(
         self, change: QGraphicsItem.GraphicsItemChange, value: object
     ) -> object:
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
@@ -670,7 +722,7 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
         self._crop_mode = False
         self.update()
 
-    def confirm_crop(self, undo_stack: "UndoStack") -> None:
+    def confirm_crop(self, undo_stack: UndoStack) -> None:
         """Commits the previewed crop and pushes a single undo entry for the
         whole gesture -- called by the Properties panel's Apply button."""
         if not self._crop_mode:
@@ -695,7 +747,7 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
 
         undo_stack.push(undo, redo)
 
-    def reset_crop(self, undo_stack: "UndoStack") -> None:
+    def reset_crop(self, undo_stack: UndoStack) -> None:
         """Clears a committed crop back to the full image, undoably."""
         if self._crop_rect is None:
             return
@@ -747,26 +799,26 @@ class ResizablePixmapItem(_HandleMixin, QGraphicsPixmapItem):
         for pos in self._crop_handle_positions().values():
             painter.drawRect(QRectF(pos.x() - handle_size / 2, pos.y() - handle_size / 2, handle_size, handle_size))
 
-    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:  # noqa: N802
+    def hoverMoveEvent(self, event: QGraphicsSceneHoverEvent) -> None:
         if self._crop_mode:
             handle = self._crop_handle_at(event.pos())
             self.setCursor(QCursor(_CURSOR_FOR_HANDLE[handle]) if handle else QCursor())
             return
         super().hoverMoveEvent(event)
 
-    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._crop_mode:
             self._crop_mouse_press(event)
             return
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._crop_mode and self._crop_dragging:
             self._crop_mouse_move(event)
             return
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         if self._crop_mode and self._crop_dragging:
             self._crop_dragging = False
             self._crop_drag_mode = None
@@ -953,7 +1005,7 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
         self.setTextWidth(max(rect.width(), MIN_SIZE))
         self.setPos(rect.topLeft())
 
-    def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         # Items are created with NoTextInteraction so a single click
         # selects/drags them like any other item; double-click (matching the
         # "Double Click to Edit" placeholder) is what switches into editing.
@@ -961,7 +1013,7 @@ class RotatableTextItem(_HandleMixin, QGraphicsTextItem):
         self.setFocus(Qt.FocusReason.MouseFocusReason)
         super().mouseDoubleClickEvent(event)
 
-    def focusOutEvent(self, event: QFocusEvent) -> None:  # noqa: N802
+    def focusOutEvent(self, event: QFocusEvent) -> None:
         # Drop back out of edit mode on blur, otherwise every later single
         # click places a text cursor instead of selecting/moving the item.
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -999,10 +1051,20 @@ class PageFrameItem(_HandleMixin, QGraphicsRectItem):
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
-        self.page: "Page | None" = None
+        self.page: Page | None = None
         self._active_for_resize = False
         self._drag_start_pos: QPointF | None = None
+        # Items dragged along with the page while it's being plain-dragged
+        # (not resized) -- see itemChange() below. Keyed by item rather than
+        # a plain list so mouseReleaseEvent can pair each with its own
+        # pre-drag position for the undo/redo closures.
+        self._page_item_start_positions: dict[QGraphicsItem, QPointF] = {}
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        # Without this, Qt never calls itemChange() for ItemPositionChange at
+        # all (it's opt-in, unlike ItemIsMovable/ItemIsSelectable which imply
+        # nothing about notifications) -- so the item-follow logic in
+        # itemChange() below would silently never run.
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
 
     def local_rect(self) -> QRectF:
         return self.rect()
@@ -1045,29 +1107,57 @@ class PageFrameItem(_HandleMixin, QGraphicsRectItem):
     # when the press isn't on a handle) -- tracked and pushed to undo here
     # rather than via canvas/view.py's usual per-selection drag tracking,
     # since page frames are deliberately never part of scene.selectedItems().
-    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    # The page's own items are dragged along with it (see itemChange()) --
+    # otherwise they'd be left behind at their old scene position and, since
+    # page membership is derived from position (see page_for_item), could
+    # even get silently reassigned to whichever page ends up nearest.
+    def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         super().mousePressEvent(event)
         if self._active_handle is None:
             self._drag_start_pos = self.pos()
+            scene = self._typed_scene()
+            if scene is not None and self.page is not None:
+                self._page_item_start_positions = {
+                    item: item.pos() for item in scene.items_on_page(self.page)
+                }
 
-    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+    def itemChange(
+        self, change: QGraphicsItem.GraphicsItemChange, value: object
+    ) -> object:
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange and self._drag_start_pos is not None:
+            delta = cast(QPointF, value) - self.pos()
+            for item in self._page_item_start_positions:
+                item.setPos(item.pos() + delta)
+        return super().itemChange(change, value)
+
+    def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:
         super().mouseReleaseEvent(event)
         start = self._drag_start_pos
         self._drag_start_pos = None
+        item_start_positions = self._page_item_start_positions
+        self._page_item_start_positions = {}
         if start is None or start == self.pos():
             return
         old_pos, new_pos = start, self.pos()
+        item_end_positions = {item: item.pos() for item in item_start_positions}
 
-        def _move_to(pos: QPointF) -> None:
-            self.setPos(pos)
+        def _move_to(frame_pos: QPointF, item_positions: dict[QGraphicsItem, QPointF]) -> None:
+            self.setPos(frame_pos)
+            for item, pos in item_positions.items():
+                item.setPos(pos)
             scene = self._typed_scene()
             if scene is not None:
                 scene.update_scene_rect()
+                scene.notify_properties_change()
 
-        self._push_undo(lambda: _move_to(old_pos), lambda: _move_to(new_pos))
+        self._push_undo(
+            lambda: _move_to(old_pos, item_start_positions),
+            lambda: _move_to(new_pos, item_end_positions),
+        )
         scene = self._typed_scene()
         if scene is not None:
             scene.update_scene_rect()
+            scene.notify_refresh()
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget: QWidget | None = None) -> None:
         super().paint(painter, self._unselected_option(option), widget)

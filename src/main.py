@@ -11,20 +11,28 @@ os.environ.setdefault("QT_API", "pyside6")
 # enumeration at startup.
 if sys.platform == "win32":
     os.environ.setdefault("QT_QPA_PLATFORM", "windows:fontengine=freetype")
+# Silences harmless "QWindowsWindow::setGeometry: Unable to set geometry"
+# spam -- Windows clamps the window to the screen's usable area whenever the
+# editor's minimum layout size is a touch taller than it (e.g. during an
+# item/page drag, which repeatedly re-triggers the layout's size negotiation),
+# which is expected and not something the app can/should avoid.
+os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.window=false")
 
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
-from src.core.fonts import load_app_fonts
+
+from src.core.fonts import BUNDLED_FONT_FAMILY, load_app_fonts
 from src.core.theme import build_stylesheet
 from src.features.app import App
+
 
 def main() -> None:
     app = QApplication(sys.argv)
     app.setStyleSheet(build_stylesheet())
 
     families = load_app_fonts()
-    if "League Spartan" in families:
-        app.setFont(QFont("League Spartan"))
+    if BUNDLED_FONT_FAMILY in families:
+        app.setFont(QFont(BUNDLED_FONT_FAMILY))
 
     window = App()
     window.show()

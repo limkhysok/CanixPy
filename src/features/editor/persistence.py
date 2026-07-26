@@ -21,9 +21,19 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QGradient, QLinearGradient, QPen, QPixmap, QTextOption
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QGradient,
+    QLinearGradient,
+    QPen,
+    QPixmap,
+    QTextOption,
+)
 from PySide6.QtWidgets import (
     QAbstractGraphicsShapeItem,
+    QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsItemGroup,
@@ -33,6 +43,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.features.editor.canvas.items import (
+    SHADOW_BLUR,
+    SHADOW_COLOR,
+    SHADOW_OFFSET,
     ResizableEllipseItem,
     ResizablePixmapItem,
     ResizablePolygonItem,
@@ -41,6 +54,8 @@ from src.features.editor.canvas.items import (
     can_toggle_aspect_lock,
     get_layer_name,
     get_shape_kind,
+    get_text_letter_spacing,
+    get_text_line_height,
     is_aspect_locked,
     is_layer_locked,
     make_shadow_effect,
@@ -48,6 +63,8 @@ from src.features.editor.canvas.items import (
     set_layer_locked,
     set_layer_name,
     set_shape_kind,
+    set_text_letter_spacing,
+    set_text_line_height,
 )
 from src.features.editor.canvas.page import page_for_item
 
@@ -59,6 +76,17 @@ if TYPE_CHECKING:
 PROJECT_FORMAT_VERSION = 2
 
 
+def _shadow_field(item: QGraphicsItem) -> dict[str, Any] | bool:
+    effect = item.graphicsEffect()
+    if not isinstance(effect, QGraphicsDropShadowEffect):
+        return False
+    return {
+        "color": effect.color().name(),
+        "blur": effect.blurRadius(),
+        "offset": [effect.xOffset(), effect.yOffset()],
+    }
+
+
 def _common_fields(item: QGraphicsItem) -> dict[str, Any]:
     fields: dict[str, Any] = {
         "x": item.pos().x(), "y": item.pos().y(), "z": item.zValue(),
@@ -66,7 +94,7 @@ def _common_fields(item: QGraphicsItem) -> dict[str, Any]:
         "visible": item.isVisible(),
         "locked": is_layer_locked(item),
         "opacity": item.opacity(),
-        "shadow": item.graphicsEffect() is not None,  # type: ignore[reportUnnecessaryComparison]
+        "shadow": _shadow_field(item),
     }
     if can_toggle_aspect_lock(item) and is_aspect_locked(item):
         fields["aspect_locked"] = True
@@ -88,7 +116,14 @@ def _apply_common_fields(item: QGraphicsItem, data: dict[str, Any]) -> None:
     item.setRotation(data.get("rotation", 0.0))
     item.setVisible(data.get("visible", True))
     item.setOpacity(data.get("opacity", 1.0))
-    if data.get("shadow"):
+    shadow = data.get("shadow")
+    if isinstance(shadow, dict):
+        offset = shadow.get("offset", list(SHADOW_OFFSET))
+        item.setGraphicsEffect(
+            make_shadow_effect(QColor(shadow.get("color", SHADOW_COLOR.name())), shadow.get("blur", SHADOW_BLUR), tuple(offset))
+        )
+    elif shadow:
+        # Old saves stored a plain bool -- fall back to the shared defaults.
         item.setGraphicsEffect(make_shadow_effect())
     if data.get("name"):
         set_layer_name(item, data["name"])
@@ -186,6 +221,8 @@ def serialize_item(item: QGraphicsItem) -> dict[str, Any] | None:
             "alignment": int(alignment),
             "text_width": item.textWidth(),
             "color": item.defaultTextColor().name(),
+            "letter_spacing": get_text_letter_spacing(item),
+            "line_height": get_text_line_height(item),
             **_common_fields(item),
         }
     if isinstance(item, QGraphicsPixmapItem):
@@ -241,6 +278,10 @@ def _deserialize_text(data: dict[str, Any]) -> QGraphicsItem:
         option = QTextOption(item.document().defaultTextOption())
         option.setAlignment(Qt.AlignmentFlag(data["alignment"]))
         item.document().setDefaultTextOption(option)
+    if data.get("letter_spacing"):
+        set_text_letter_spacing(item, data["letter_spacing"])
+    if data.get("line_height"):
+        set_text_line_height(item, data["line_height"])
     return item
 
 
@@ -292,7 +333,7 @@ def deserialize_item(data: dict[str, Any]) -> QGraphicsItem | None:
     return item
 
 
-def serialize_page_items(scene: "DesignScene", page: "Page") -> list[dict[str, Any]]:
+def serialize_page_items(scene: DesignScene, page: Page) -> list[dict[str, Any]]:
     """Top-level items belonging to `page` (see page_for_item), with x/y
     stored *relative to the page's own origin* -- decouples the saved
     format from wherever the page happens to be positioned (or whatever
@@ -318,7 +359,7 @@ def serialize_page_items(scene: "DesignScene", page: "Page") -> list[dict[str, A
     return result
 
 
-def deserialize_page_items(items_data: list[dict[str, Any]], page: "Page") -> list[QGraphicsItem]:
+def deserialize_page_items(items_data: list[dict[str, Any]], page: Page) -> list[QGraphicsItem]:
     """Inverse of serialize_page_items's x/y-offset step: builds items via
     the generic deserialize_item() (which knows nothing about pages, and is
     also reused by plain copy/paste/duplicate-item, so it must stay
@@ -335,7 +376,7 @@ def deserialize_page_items(items_data: list[dict[str, Any]], page: "Page") -> li
 DEFAULT_PAGE_BACKGROUND = "#ffffff"
 
 
-def serialize_page_entry(scene: "DesignScene", page: "Page") -> dict[str, Any]:
+def serialize_page_entry(scene: DesignScene, page: Page) -> dict[str, Any]:
     entry: dict[str, Any] = {
         "items": serialize_page_items(scene, page),
         "width": page.width,
@@ -352,17 +393,18 @@ def serialize_page_entry(scene: "DesignScene", page: "Page") -> dict[str, Any]:
     return entry
 
 
-def serialize_project(app: "EditorView") -> dict[str, Any]:
+def serialize_project(app: EditorView) -> dict[str, Any]:
     return {
         "format_version": PROJECT_FORMAT_VERSION,
         "canvas_size": list(app.canvas_size),
         # A plain ordered list -- page order/identity is just list position,
         # so reordering pages doesn't need any renumbering bookkeeping.
         "pages": [serialize_page_entry(app.scene, page) for page in app.scene.pages],
+        "text_styles": app.viewmodel.text_styles,
     }
 
 
-def save_project(app: "EditorView", file_path: str) -> None:
+def save_project(app: EditorView, file_path: str) -> None:
     with open(file_path, "w", encoding="utf-8") as handle:
         json.dump(serialize_project(app), handle)
 

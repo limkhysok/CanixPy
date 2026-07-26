@@ -9,8 +9,9 @@ between.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QMouseEvent
@@ -62,7 +63,7 @@ class PageLabel(QWidget):
     move_requested = Signal(object, int)  # Page, delta
     rename_requested = Signal(object, str)  # Page, new name
 
-    def __init__(self, viewmodel: "EditorViewModel", page: Page, parent: QWidget | None = None) -> None:
+    def __init__(self, viewmodel: EditorViewModel, page: Page, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.viewmodel = viewmodel
         self.page = page
@@ -77,7 +78,7 @@ class PageLabel(QWidget):
         self.name_label = QLabel()
         self.name_label.setObjectName("pageName")
         self.name_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.name_label.setToolTip("Double-click to rename")
+        self.set_tooltip_enabled(True)
         layout.addWidget(self.name_label)
 
         self.name_edit = QLineEdit()
@@ -114,11 +115,19 @@ class PageLabel(QWidget):
     def refresh_label(self) -> None:
         self.name_label.setText(self.page.name or self._auto_name())
 
+    def set_tooltip_enabled(self, enabled: bool) -> None:
+        # Off while a drag is active (see PageOverlayManager.sync) -- this
+        # label is repositioned every repaint to track its page, so during a
+        # drag it keeps sliding back under a stationary cursor, which Qt
+        # reads as a fresh hover and pops the tooltip right back up even
+        # though the mouse never actually moved onto it.
+        self.name_label.setToolTip("Double-click to rename" if enabled else "")
+
     def _auto_name(self) -> str:
         index = self.viewmodel.scene.pages.index(self.page)
         return f"Page {index + 1}"
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         self._start_rename()
         super().mouseDoubleClickEvent(event)
 
@@ -174,7 +183,7 @@ class PageOverlayManager:
 
     def __init__(
         self,
-        viewmodel: "EditorViewModel",
+        viewmodel: EditorViewModel,
         viewport: QWidget,
         on_add: Callable[[], None],
         on_duplicate: Callable[[Page], None],
@@ -213,7 +222,7 @@ class PageOverlayManager:
                 self.labels[page].refresh_label()
         self.add_button.raise_()
 
-    def sync(self, view: "ZoomableGraphicsView") -> None:
+    def sync(self, view: ZoomableGraphicsView) -> None:
         scene = self.viewmodel.scene
         if set(scene.pages) != set(self.labels):
             self.rebuild()
@@ -225,9 +234,11 @@ class PageOverlayManager:
         best_area = 0.0
         last_page = scene.pages[-1]
         last_label_rect: QRectF | None = None
+        tooltips_enabled = not scene.drag_active
 
         for page in scene.pages:
             label = self.labels[page]
+            label.set_tooltip_enabled(tooltips_enabled)
             # page.rect(), not page.frame.sceneBoundingRect() -- the frame's
             # boundingRect() is padded out for resize/rotate-handle hit
             # testing (see _HandleMixin), which isn't the page's actual

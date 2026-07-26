@@ -20,8 +20,8 @@ class Task:
     canvas_size: tuple[int, int]
     id: str = field(default_factory=_new_id)
     project_id: str | None = None
-    created_at: datetime = field(default_factory=datetime.now)
-    modified_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
+    modified_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
     file_path: str | None = None
     original_filename: str | None = None
     file_type: str | None = None
@@ -41,4 +41,4 @@ class Project:
 
     name: str
     id: str = field(default_factory=_new_id)
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now().astimezone())

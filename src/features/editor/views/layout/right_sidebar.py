@@ -1,10 +1,29 @@
 from __future__ import annotations
+
 from pathlib import Path
-from typing import TYPE_CHECKING
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLayout, QCheckBox, QLabel, QPushButton, QFontComboBox, QSlider, QSpinBox
-from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsItem, QGraphicsItemGroup
+from typing import TYPE_CHECKING, cast
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QFontComboBox,
+    QGraphicsDropShadowEffect,
+    QGraphicsEllipseItem,
+    QGraphicsItem,
+    QGraphicsItemGroup,
+    QGraphicsRectItem,
+    QGraphicsTextItem,
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QPushButton,
+    QSlider,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
 from src.core import icons, theme
 from src.features.editor.canvas.items import (
     MIN_SIZE,
@@ -12,6 +31,8 @@ from src.features.editor.canvas.items import (
     can_edit_height,
     can_toggle_aspect_lock,
     get_item_size,
+    get_text_letter_spacing,
+    get_text_line_height,
     is_aspect_locked,
     set_aspect_locked,
 )
@@ -46,6 +67,8 @@ SECTION_ICONS = {
     "Font Family": "fa5s.font",
     "Font Size": "fa5s.text-height",
     "Style": "fa5s.bold",
+    "Letter Spacing": "fa5s.text-width",
+    "Line Height": "fa5s.ruler-vertical",
     "Text Alignment": ICON_ALIGN_LEFT,
     "Arrangement": "fa5s.layer-group",
     "Distribute": "fa5s.arrows-alt-h",
@@ -114,7 +137,7 @@ def _toggle_button(icon_name: str, tooltip: str, checked: bool) -> QPushButton:
     return btn
 
 class PropertiesPanel(QWidget):
-    def __init__(self, editor_viewmodel: "EditorViewModel", parent: QWidget | None = None) -> None:
+    def __init__(self, editor_viewmodel: EditorViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # Two different viewmodels in play: `editor_viewmodel` (document
         # state -- the scene) vs. `self.viewmodel` (item-property mutation
@@ -272,6 +295,27 @@ class PropertiesPanel(QWidget):
             self.main_layout.addLayout(style_row)
 
             self.main_layout.addSpacing(8)
+            self.main_layout.addWidget(_section_header("Letter Spacing"))
+            letter_spacing_box = QSpinBox()
+            letter_spacing_box.setRange(-20, 100)
+            letter_spacing_box.setSuffix(" px")
+            letter_spacing_box.setValue(round(get_text_letter_spacing(item)))
+            letter_spacing_box.valueChanged.connect(
+                lambda px: self.viewmodel.set_letter_spacing(item, px, self.editor_viewmodel.scene.undo_stack)
+            )
+            self.main_layout.addWidget(letter_spacing_box)
+
+            self.main_layout.addWidget(_section_header("Line Height"))
+            line_height_box = QSpinBox()
+            line_height_box.setRange(50, 300)
+            line_height_box.setSuffix(" %")
+            line_height_box.setValue(round(get_text_line_height(item)))
+            line_height_box.valueChanged.connect(
+                lambda percent: self.viewmodel.set_line_height(item, percent, self.editor_viewmodel.scene.undo_stack)
+            )
+            self.main_layout.addWidget(line_height_box)
+
+            self.main_layout.addSpacing(8)
             self.main_layout.addWidget(_section_header("Text Alignment"))
             align_row = QHBoxLayout()
             align_options = (
@@ -327,6 +371,10 @@ class PropertiesPanel(QWidget):
         count_label.setObjectName("hintText")
         self.main_layout.addWidget(count_label)
 
+        if all(isinstance(item, QGraphicsTextItem) for item in items):
+            self.main_layout.addSpacing(8)
+            self._add_multi_text_section(cast(list[QGraphicsTextItem], items))
+
         self.main_layout.addSpacing(8)
         self._add_effects_section(items)
 
@@ -373,6 +421,59 @@ class PropertiesPanel(QWidget):
         btn_group = _button("fa5s.object-group", "Group")
         btn_group.clicked.connect(lambda: self.editor_viewmodel.scene.group_items(items))
         self.main_layout.addWidget(btn_group)
+
+    def _add_multi_text_section(self, items: list[QGraphicsTextItem]) -> None:
+        undo_stack = self.editor_viewmodel.scene.undo_stack
+        first_font = items[0].font()
+
+        self.main_layout.addWidget(_section_header("Font Family"))
+        font_box = QFontComboBox()
+        font_box.setCursor(Qt.CursorShape.PointingHandCursor)
+        font_box.setCurrentFont(first_font)
+        font_box.currentFontChanged.connect(lambda font: self.viewmodel.change_text_font_multi(items, font, undo_stack))
+        self.main_layout.addWidget(font_box)
+
+        self.main_layout.addWidget(_section_header("Font Size"))
+        size_box = QSpinBox()
+        size_box.setRange(8, 120)
+        size_box.setValue(first_font.pointSize())
+        size_box.valueChanged.connect(lambda size: self.viewmodel.change_text_size_multi(items, size, undo_stack))
+        self.main_layout.addWidget(size_box)
+
+        btn_color = _button(ICON_PALETTE, "Text Color")
+        btn_color.clicked.connect(lambda: self.viewmodel.change_text_color_multi(items, undo_stack))
+        self.main_layout.addWidget(btn_color)
+
+        self.main_layout.addWidget(_section_header("Style"))
+        btn_bold = _toggle_button("fa5s.bold", "Bold", first_font.bold())
+        btn_italic = _toggle_button("fa5s.italic", "Italic", first_font.italic())
+        btn_underline = _toggle_button("fa5s.underline", "Underline", first_font.underline())
+        btn_bold.toggled.connect(lambda on: self.viewmodel.toggle_text_bold_multi(items, on, undo_stack))
+        btn_italic.toggled.connect(lambda on: self.viewmodel.toggle_text_italic_multi(items, on, undo_stack))
+        btn_underline.toggled.connect(lambda on: self.viewmodel.toggle_text_underline_multi(items, on, undo_stack))
+        style_row = QHBoxLayout()
+        style_row.addWidget(btn_bold)
+        style_row.addWidget(btn_italic)
+        style_row.addWidget(btn_underline)
+        self.main_layout.addLayout(style_row)
+
+        self.main_layout.addSpacing(8)
+        self.main_layout.addWidget(_section_header("Text Alignment"))
+        align_row = QHBoxLayout()
+        align_options = (
+            (ICON_ALIGN_LEFT, "Align Left", Qt.AlignmentFlag.AlignLeft),
+            (ICON_ALIGN_CENTER, "Align Center", Qt.AlignmentFlag.AlignHCenter),
+            ("fa5s.align-right", "Align Right", Qt.AlignmentFlag.AlignRight),
+            ("fa5s.align-justify", "Justify", Qt.AlignmentFlag.AlignJustify),
+        )
+        for icon_name, tooltip, alignment in align_options:
+            btn = _button(icon_name, "")
+            btn.setToolTip(tooltip)
+            btn.clicked.connect(
+                lambda _checked=False, a=alignment: self.viewmodel.set_text_alignment_multi(items, a, undo_stack)
+            )
+            align_row.addWidget(btn)
+        self.main_layout.addLayout(align_row)
 
     def _add_image_crop_section(self, item: ResizablePixmapItem) -> None:
         self.main_layout.addWidget(_section_header("Image"))
@@ -442,17 +543,65 @@ class PropertiesPanel(QWidget):
         opacity_slider.valueChanged.connect(on_opacity_changed)
         self.main_layout.addWidget(opacity_slider)
 
+        has_shadow = items[0].graphicsEffect() is not None  # type: ignore[reportUnnecessaryComparison]
         shadow_checkbox = QCheckBox("Drop Shadow")
         shadow_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
-        shadow_checkbox.setChecked(items[0].graphicsEffect() is not None)  # type: ignore[reportUnnecessaryComparison]
+        shadow_checkbox.setChecked(has_shadow)
 
         def on_shadow_toggled(checked: bool) -> None:
             if len(items) == 1:
                 self.viewmodel.toggle_shadow(items[0], checked, self.editor_viewmodel.scene.undo_stack)
+                # Re-render so the color/blur/offset controls appear or
+                # disappear immediately (same pattern as crop-mode's
+                # _enter_crop/_confirm_crop re-invoking inspect_selection).
+                self.inspect_selection([items[0]])
             else:
                 self.viewmodel.toggle_shadow_multi(items, checked, self.editor_viewmodel.scene.undo_stack)
         shadow_checkbox.toggled.connect(on_shadow_toggled)
         self.main_layout.addWidget(shadow_checkbox)
+
+        if len(items) == 1 and has_shadow:
+            self._add_shadow_detail_controls(items[0])
+
+    def _add_shadow_detail_controls(self, item: QGraphicsItem) -> None:
+        effect = item.graphicsEffect()
+        if not isinstance(effect, QGraphicsDropShadowEffect):
+            return
+
+        btn_color = _button(ICON_PALETTE, "Shadow Color")
+        btn_color.clicked.connect(lambda: self.viewmodel.set_shadow_color(item, self.editor_viewmodel.scene.undo_stack))
+        self.main_layout.addWidget(btn_color)
+
+        blur_label = QLabel("Blur")
+        blur_label.setObjectName("hintText")
+        self.main_layout.addWidget(blur_label)
+        blur_slider = QSlider(Qt.Orientation.Horizontal)
+        blur_slider.setRange(0, 60)
+        blur_slider.setValue(round(effect.blurRadius()))
+        blur_slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        blur_slider.valueChanged.connect(
+            lambda blur: self.viewmodel.set_shadow_blur(item, blur, self.editor_viewmodel.scene.undo_stack)
+        )
+        self.main_layout.addWidget(blur_slider)
+
+        offset_label = QLabel("Offset")
+        offset_label.setObjectName("hintText")
+        self.main_layout.addWidget(offset_label)
+        dx_box, dy_box = QSpinBox(), QSpinBox()
+        for box, prefix, value in ((dx_box, "X  ", effect.xOffset()), (dy_box, "Y  ", effect.yOffset())):
+            box.setRange(-60, 60)
+            box.setPrefix(prefix)
+            box.setCursor(Qt.CursorShape.IBeamCursor)
+            box.setValue(round(value))
+
+        def on_offset_changed(_value: int = 0) -> None:
+            self.viewmodel.set_shadow_offset(item, dx_box.value(), dy_box.value(), self.editor_viewmodel.scene.undo_stack)
+        dx_box.valueChanged.connect(on_offset_changed)
+        dy_box.valueChanged.connect(on_offset_changed)
+        offset_row = QHBoxLayout()
+        offset_row.addWidget(dx_box)
+        offset_row.addWidget(dy_box)
+        self.main_layout.addLayout(offset_row)
 
     def _add_align_section(self, single_item: bool) -> None:
         label = "Align to Page" if single_item else "Align Selection"
@@ -559,7 +708,7 @@ class PropertiesPanel(QWidget):
             lock_checkbox.toggled.connect(lambda on: set_aspect_locked(item, on))
             self.main_layout.addWidget(lock_checkbox)
 
-    def inspect_page(self, scene: "DesignScene", page: "Page") -> None:
+    def inspect_page(self, scene: DesignScene, page: Page) -> None:
         self.clear_layout()
         self.main_layout.addWidget(_section_header("Page"))
 

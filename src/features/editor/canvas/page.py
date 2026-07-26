@@ -10,7 +10,7 @@ geometry (the frame itself) instead of two that could drift apart.
 from __future__ import annotations
 
 import math
-from typing import Iterable
+from collections.abc import Iterable
 
 from PySide6.QtCore import QRectF
 from PySide6.QtGui import QBrush, QColor

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtWidgets import QGraphicsItem
 
@@ -41,6 +42,11 @@ class EditorViewModel:
         # at once. See set_active_page().
         self.active_page_index: int = 0
         self._clipboard: list[dict[str, Any]] = []
+        # User-saved reusable text styles (name + font/color/spacing fields --
+        # see persistence.serialize_item's "text" branch, which this reuses
+        # the shape of). Persisted per-project (see persistence.serialize_project),
+        # not app-wide -- they travel with the project that created them.
+        self.text_styles: list[dict[str, Any]] = []
 
         self.scene = self._new_scene()
         self.scene.add_page(*canvas_size)
@@ -184,6 +190,14 @@ class EditorViewModel:
         for item in new_items:
             item.setSelected(True)
 
+    # --- TEXT STYLES ---
+    def add_text_style(self, style: dict[str, Any]) -> None:
+        self.text_styles.append(style)
+
+    def remove_text_style(self, index: int) -> None:
+        if 0 <= index < len(self.text_styles):
+            self.text_styles.pop(index)
+
     # --- PROJECT DATA ---
     def apply_project_data(self, data: dict[str, Any]) -> None:
         """Replace the whole document with a previously-serialized project
@@ -194,6 +208,7 @@ class EditorViewModel:
             self.canvas_size = (int(canvas_size[0]), int(canvas_size[1]))
 
         self.active_page_index = 0
+        self.text_styles = data.get("text_styles", [])
 
         new_scene = self._new_scene()
         pages_data: list[dict[str, Any]] = data.get("pages", [])
