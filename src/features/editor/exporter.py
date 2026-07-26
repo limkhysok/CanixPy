@@ -1,8 +1,9 @@
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QMarginsF, QRectF, QSize, QSizeF, Qt
-from PySide6.QtGui import QBrush, QImage, QPageSize, QPainter, QPdfWriter, QPixmap
+from PySide6.QtGui import QBrush, QImage, QPageSize, QPainter, QPdfWriter
 from PySide6.QtSvg import QSvgGenerator
 from PySide6.QtWidgets import QGraphicsScene
 
@@ -13,6 +14,19 @@ if TYPE_CHECKING:
 # DPI makes "1 point" and "1 device pixel" the same number, so the page can
 # be sized directly in the canvas's own width/height without a conversion.
 _PDF_POINTS_PER_INCH = 72
+
+# The canvas's own pixel dimensions are treated as a 72 DPI ("1 CSS px = 1
+# point") baseline, same assumption as the PDF writer above -- so a chosen
+# export DPI translates to a pixel scale via dpi / 72, and that scale is what
+# actually grows the rendered image; the DPI value itself is then just
+# embedded as metadata (see _set_image_dpi) for print software to read.
+BASELINE_DPI = 72
+
+
+def _set_image_dpi(image: QImage, dpi: int) -> None:
+    dots_per_meter = round(dpi / 0.0254)
+    image.setDotsPerMeterX(dots_per_meter)
+    image.setDotsPerMeterY(dots_per_meter)
 
 
 def _page_source_rect(page: "Page") -> QRectF:
@@ -40,9 +54,10 @@ def _restore_page_background(scene: QGraphicsScene, page: "Page", was_visible: b
 
 
 def export_scene_to_png(
-    scene: QGraphicsScene, file_path: str, page: "Page", transparent: bool = False
+    scene: QGraphicsScene, file_path: str, page: "Page", transparent: bool = False, dpi: int = BASELINE_DPI
 ) -> None:
-    width, height = int(page.width), int(page.height)
+    scale = dpi / BASELINE_DPI
+    width, height = round(page.width * scale), round(page.height * scale)
     # Hide selection boundaries temporarily so handles aren't baked into the image
     scene.clearSelection()
 
@@ -52,7 +67,7 @@ def export_scene_to_png(
             image = QImage(width, height, QImage.Format.Format_ARGB32)
             image.fill(Qt.GlobalColor.transparent)
         else:
-            image = QPixmap(width, height)
+            image = QImage(width, height, QImage.Format.Format_RGB32)
             image.fill(Qt.GlobalColor.white)
 
         painter = QPainter(image)
@@ -64,15 +79,17 @@ def export_scene_to_png(
         if restore_state is not None:
             _restore_page_background(scene, page, *restore_state)
 
+    _set_image_dpi(image, dpi)
     image.save(file_path, "PNG")
 
 
-def export_scene_to_jpg(scene: QGraphicsScene, file_path: str, page: "Page") -> None:
-    width, height = int(page.width), int(page.height)
+def export_scene_to_jpg(scene: QGraphicsScene, file_path: str, page: "Page", dpi: int = BASELINE_DPI) -> None:
+    scale = dpi / BASELINE_DPI
+    width, height = round(page.width * scale), round(page.height * scale)
     scene.clearSelection()
 
     # JPEG has no alpha channel, so this always renders on an opaque white page.
-    image = QPixmap(width, height)
+    image = QImage(width, height, QImage.Format.Format_RGB32)
     image.fill(Qt.GlobalColor.white)
 
     painter = QPainter(image)
@@ -81,6 +98,7 @@ def export_scene_to_jpg(scene: QGraphicsScene, file_path: str, page: "Page") -> 
     scene.render(painter, QRectF(0, 0, width, height), _page_source_rect(page))
     painter.end()
 
+    _set_image_dpi(image, dpi)
     image.save(file_path, "JPG", quality=92)
 
 
@@ -117,29 +135,67 @@ def export_scene_to_pdf(scene: QGraphicsScene, file_path: str, page: "Page") -> 
     painter.end()
 
 
-# Format key -> (file extension, export function) -- shared by export_all_pages
-# so the "export every page" flow reuses the exact same per-page renderers as
-# the single-page Export menu instead of a separate implementation. Defined
-# after every export_scene_to_* function above so this dict can reference
-# them directly.
+# Format key -> (file extension, export function, whether it accepts a `dpi`
+# kwarg) -- shared by export_all_pages so the "export every page" flow reuses
+# the exact same per-page renderers as the single-page Export dialog instead
+# of a separate implementation. Defined after every export_scene_to_* function
+# above so this dict can reference them directly. PDF/SVG are vector formats
+# with no per-pixel resolution to vary, so they don't take a `dpi` kwarg.
 _EXPORTERS = {
-    "png": ("png", export_scene_to_png),
-    "png_transparent": ("png", lambda scene, path, page: export_scene_to_png(scene, path, page, transparent=True)),
-    "jpg": ("jpg", export_scene_to_jpg),
-    "pdf": ("pdf", export_scene_to_pdf),
-    "svg": ("svg", export_scene_to_svg),
+    "png": ("png", export_scene_to_png, True),
+    "png_transparent": (
+        "png",
+        lambda scene, path, page, dpi=BASELINE_DPI: export_scene_to_png(scene, path, page, transparent=True, dpi=dpi),
+        True,
+    ),
+    "jpg": ("jpg", export_scene_to_jpg, True),
+    "pdf": ("pdf", export_scene_to_pdf, False),
+    "svg": ("svg", export_scene_to_svg, False),
 }
 
 
+def export_page(scene: QGraphicsScene, file_path: str, page: "Page", fmt: str, dpi: int = BASELINE_DPI) -> None:
+    """Exports a single page to `file_path` under the given format key (an
+    _EXPORTERS key) -- the single-page counterpart to export_all_pages,
+    sharing the same format dispatch."""
+    _extension, export_one, accepts_dpi = _EXPORTERS[fmt]
+    if accepts_dpi:
+        export_one(scene, file_path, page, dpi=dpi)
+    else:
+        export_one(scene, file_path, page)
+
+
+def export_extension(fmt: str) -> str:
+    """The file extension (no leading dot) an _EXPORTERS key writes."""
+    return _EXPORTERS[fmt][0]
+
+
 def export_all_pages(
-    scene: QGraphicsScene, pages: list["Page"], directory: str, fmt: str, base_name: str = "design_page"
+    scene: QGraphicsScene,
+    pages: list["Page"],
+    directory: str,
+    fmt: str,
+    base_name: str = "design_page",
+    dpi: int = BASELINE_DPI,
+    on_progress: Callable[[int, int], bool] | None = None,
 ) -> list[str]:
     """Exports every page to its own file in `directory`, named
-    "{base_name}_{n}.{ext}" in page order. Returns the written paths."""
-    extension, export_one = _EXPORTERS[fmt]
+    "{base_name}_{n}.{ext}" in page order. Returns the written paths.
+
+    `on_progress`, if given, is called after each page as
+    (pages_done, pages_total) so a caller can drive a progress dialog; it
+    returns whether to keep going, so returning False (e.g. the user hit
+    Cancel) stops the export early with whatever's been written so far."""
+    extension, export_one, accepts_dpi = _EXPORTERS[fmt]
     paths: list[str] = []
+    total = len(pages)
     for index, page in enumerate(pages, start=1):
         file_path = str(Path(directory) / f"{base_name}_{index}.{extension}")
-        export_one(scene, file_path, page)
+        if accepts_dpi:
+            export_one(scene, file_path, page, dpi=dpi)
+        else:
+            export_one(scene, file_path, page)
         paths.append(file_path)
+        if on_progress is not None and not on_progress(index, total):
+            break
     return paths

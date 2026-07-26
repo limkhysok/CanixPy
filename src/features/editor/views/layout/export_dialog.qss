@@ -1,0 +1,42 @@
+QGroupBox {
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+    margin-top: 10px;
+    padding: 14px 12px 10px 12px;
+    font-weight: 600;
+    color: $TEXT_PRIMARY;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 4px;
+    color: $TEXT_SECONDARY;
+}
+QRadioButton, QCheckBox {
+    padding: 3px 0px;
+    color: $TEXT_PRIMARY;
+}
+QRadioButton::indicator {
+    width: 15px;
+    height: 15px;
+    border: 1px solid $BORDER;
+    border-radius: 8px;
+    background: $BACKGROUND;
+}
+QRadioButton::indicator:hover {
+    border-color: $ACCENT;
+}
+QRadioButton::indicator:checked {
+    background: $ACCENT;
+    border-color: $ACCENT;
+}
+QGroupBox:disabled, QGroupBox:disabled::title,
+QRadioButton:disabled, QCheckBox:disabled {
+    color: $TEXT_SECONDARY;
+}
+QLabel#outputPreview {
+    color: $TEXT_SECONDARY;
+    font-size: 12px;
+    padding: 0px 2px;
+}

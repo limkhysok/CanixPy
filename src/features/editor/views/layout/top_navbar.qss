@@ -35,24 +35,18 @@ QPushButton#iconButton:disabled {
 QLabel#navLabel {
     color: $TEXT_SECONDARY;
 }
-QToolButton#exportButton {
+QPushButton#exportButton {
     background-color: $ACCENT_PRESSED;
     border: none;
     border-radius: 9px;
-    padding: 9px 30px 9px 16px;
+    padding: 9px 20px;
     color: $TEXT_ON_ACCENT;
     font-weight: 700;
     font-size: 13px;
 }
-QToolButton#exportButton:hover {
+QPushButton#exportButton:hover {
     background-color: $ACCENT_HOVER;
 }
-QToolButton#exportButton:pressed {
+QPushButton#exportButton:pressed {
     background-color: $ACCENT_PRESSED;
-}
-QToolButton#exportButton::menu-indicator {
-    subcontrol-position: right center;
-    subcontrol-origin: padding;
-    right: 8px;
-    width: 12px;
 }

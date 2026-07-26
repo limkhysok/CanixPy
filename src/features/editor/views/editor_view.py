@@ -1,14 +1,18 @@
-from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import shiboken6
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
     QFileDialog,
     QGraphicsItem,
     QHBoxLayout,
     QMainWindow,
+    QMessageBox,
+    QProgressDialog,
     QVBoxLayout,
     QWidget,
 )
@@ -16,18 +20,22 @@ from PySide6.QtWidgets import (
 from src.features.editor import persistence
 from src.features.editor.canvas.page import Page, page_for_item
 from src.features.editor.canvas.view import ZoomableGraphicsView
-from src.features.editor.exporter import (
-    export_all_pages,
-    export_scene_to_jpg,
-    export_scene_to_pdf,
-    export_scene_to_png,
-    export_scene_to_svg,
-)
+from src.features.editor.exporter import export_all_pages, export_extension, export_page
 from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
+from src.features.editor.views.layout.export_dialog import ALL_PAGES, ExportDialog
 from src.features.editor.views.layout.left_sidebar import LeftSidebar
 from src.features.editor.views.layout.page_overlay import PageOverlayManager
 from src.features.editor.views.layout.right_sidebar import PropertiesPanel
 from src.features.editor.views.layout.top_navbar import TopNavbar
+
+# fmt -> file dialog filter, keyed by the same _EXPORTERS keys ExportDialog hands back.
+_EXPORT_FILE_FILTERS: dict[str, str] = {
+    "png": "PNG Image (*.png)",
+    "png_transparent": "PNG Image (*.png)",
+    "jpg": "JPG Image (*.jpg)",
+    "pdf": "PDF Document (*.pdf)",
+    "svg": "SVG Image (*.svg)",
+}
 
 
 class EditorView(QMainWindow):
@@ -84,12 +92,7 @@ class EditorView(QMainWindow):
         self.top_navbar.undo_clicked.connect(self.undo)
         self.top_navbar.redo_clicked.connect(self.redo)
         self.top_navbar.grid_toggled.connect(lambda checked: self.view.set_grid_visible(checked))
-        self.top_navbar.export_png_clicked.connect(self.export_page_to_png)
-        self.top_navbar.export_png_transparent_clicked.connect(self.export_page_to_png_transparent)
-        self.top_navbar.export_jpg_clicked.connect(self.export_page_to_jpg)
-        self.top_navbar.export_pdf_clicked.connect(self.export_page_to_pdf)
-        self.top_navbar.export_svg_clicked.connect(self.export_page_to_svg)
-        self.top_navbar.export_all_pages_clicked.connect(self.export_all_pages_to_folder)
+        self.top_navbar.export_clicked.connect(self.open_export_dialog)
 
         # --- PANEL SYSTEM SETUP ---
         self.left_panel = LeftSidebar(self.viewmodel)
@@ -298,54 +301,83 @@ class EditorView(QMainWindow):
         self.refresh_editor_panels()
 
     # --- EXPORT ---
-    def export_page_to_png(self) -> None:
-        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.png", "PNG Image (*.png)", self._do_export_png)
+    def open_export_dialog(self) -> None:
+        dialog = ExportDialog(self.scene.pages, self.viewmodel.active_page_index, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
 
-    def export_page_to_png_transparent(self) -> None:
-        self._export(
-            f"design_page_{self.viewmodel.active_page_index + 1}.png",
-            "PNG Image (*.png)",
-            self._do_export_png_transparent,
-        )
+        fmt, dpi, target = dialog.export_key(), dialog.dpi(), dialog.selected_page()
+        if target is ALL_PAGES:
+            self._export_all_pages(fmt, dpi)
+        else:
+            self._export_single_page(fmt, dpi, target)
 
-    def export_page_to_jpg(self) -> None:
-        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.jpg", "JPG Image (*.jpg)", self._do_export_jpg)
+    def _export_single_page(self, fmt: str, dpi: int, page: Page) -> None:
+        page_number = self.scene.pages.index(page) + 1
+        default_name = f"design_page_{page_number}.{export_extension(fmt)}"
+        file_path, _ = QFileDialog.getSaveFileName(self, "Export Page", default_name, _EXPORT_FILE_FILTERS[fmt])
+        if not file_path:
+            return
 
-    def export_page_to_pdf(self) -> None:
-        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.pdf", "PDF Document (*.pdf)", self._do_export_pdf)
+        # Indeterminate (range 0-0): a single render+save isn't meaningfully
+        # subdivisible into steps. setMinimumDuration's deferred-show timer
+        # needs the event loop pumped to fire, which never happens during
+        # the blocking export_page() call below -- so instead of relying on
+        # it, force the dialog to show and actually paint *before* the
+        # blocking call starts.
+        progress = QProgressDialog("Exporting…", "Cancel", 0, 0, self)
+        progress.setWindowTitle("Export")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setCancelButton(None)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.show()
+        QApplication.processEvents()
+        try:
+            export_page(self.scene, file_path, page, fmt, dpi=dpi)
+        finally:
+            progress.close()
 
-    def export_page_to_svg(self) -> None:
-        self._export(f"design_page_{self.viewmodel.active_page_index + 1}.svg", "SVG Image (*.svg)", self._do_export_svg)
+        self._notify_export_done(f"Exported {Path(file_path).name}", Path(file_path).parent)
 
-    def export_all_pages_to_folder(self, fmt: str) -> None:
+    def _export_all_pages(self, fmt: str, dpi: int) -> None:
         """Exports every page in the document to its own file in a chosen
-        folder -- unlike the single-page Export menu entries, which always
-        target only the active page."""
+        folder -- unlike a single-page export, which always targets exactly
+        one page picked in the dialog."""
         directory = QFileDialog.getExistingDirectory(self, "Export All Pages To")
         if not directory:
             return
-        export_all_pages(self.scene, self.scene.pages, directory, fmt)
 
-    def _export(self, default_name: str, file_filter: str, do_export: Callable[[str, Page], None]) -> None:
-        file_path, _ = QFileDialog.getSaveFileName(self, "Export Page", default_name, file_filter)
-        if not file_path:
-            return
-        # The active page's actual size, not an app-level default -- a page
-        # resized via the Properties panel would otherwise silently export
-        # at the wrong dimensions.
-        do_export(file_path, self.active_page)
+        total = len(self.scene.pages)
+        progress = QProgressDialog("Preparing export…", "Cancel", 0, total, self)
+        progress.setWindowTitle("Export All Pages")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(400)
+        progress.setAutoClose(False)
 
-    def _do_export_png(self, file_path: str, page: Page) -> None:
-        export_scene_to_png(self.scene, file_path, page)
+        def report_progress(done: int, page_total: int) -> bool:
+            progress.setLabelText(f"Exporting page {done} of {page_total}…")
+            progress.setValue(done)
+            QApplication.processEvents()
+            return not progress.wasCanceled()
 
-    def _do_export_png_transparent(self, file_path: str, page: Page) -> None:
-        export_scene_to_png(self.scene, file_path, page, transparent=True)
+        paths = export_all_pages(
+            self.scene, self.scene.pages, directory, fmt, dpi=dpi, on_progress=report_progress
+        )
+        progress.close()
 
-    def _do_export_jpg(self, file_path: str, page: Page) -> None:
-        export_scene_to_jpg(self.scene, file_path, page)
+        exported = len(paths)
+        noun = "page" if exported == 1 else "pages"
+        suffix = "" if exported == total else f" (stopped early -- {total - exported} remaining)"
+        self._notify_export_done(f"Exported {exported} {noun} to {Path(directory).name}{suffix}", Path(directory))
 
-    def _do_export_pdf(self, file_path: str, page: Page) -> None:
-        export_scene_to_pdf(self.scene, file_path, page)
-
-    def _do_export_svg(self, file_path: str, page: Page) -> None:
-        export_scene_to_svg(self.scene, file_path, page)
+    def _notify_export_done(self, message: str, folder: Path) -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle("Export Complete")
+        box.setText(message)
+        open_folder_button = box.addButton("Open Folder", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Ok)
+        box.exec()
+        if box.clickedButton() is open_folder_button:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))

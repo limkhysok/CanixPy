@@ -3,13 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QGraphicsDropShadowEffect,
     QHBoxLayout,
-    QMenu,
     QPushButton,
-    QToolButton,
     QWidget,
 )
 
@@ -31,13 +29,7 @@ class TopNavbar(QWidget):
     undo_clicked = Signal()
     redo_clicked = Signal()
     grid_toggled = Signal(bool)
-    export_png_clicked = Signal()
-    export_png_transparent_clicked = Signal()
-    export_jpg_clicked = Signal()
-    export_pdf_clicked = Signal()
-    export_svg_clicked = Signal()
-    # fmt is one of exporter._EXPORTERS's keys ("png"/"png_transparent"/"jpg"/"pdf"/"svg")
-    export_all_pages_clicked = Signal(str)
+    export_clicked = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -72,42 +64,10 @@ class TopNavbar(QWidget):
         self.btn_grid.toggled.connect(self.grid_toggled.emit)
         layout.addWidget(self.btn_grid)
 
-        btn_export = QToolButton()
+        btn_export = QPushButton(icons.icon("fa5s.file-export", color=theme.TEXT_ON_ACCENT), "Export")
         btn_export.setObjectName("exportButton")
-        btn_export.setText("Export")
-        btn_export.setIcon(icons.icon("fa5s.file-export", color=theme.TEXT_ON_ACCENT))
-        btn_export.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_export.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-
-        export_menu = QMenu(btn_export)
-        export_actions = (
-            ("PNG", self.export_png_clicked.emit),
-            ("PNG (Transparent)", self.export_png_transparent_clicked.emit),
-            ("JPG", self.export_jpg_clicked.emit),
-            ("PDF", self.export_pdf_clicked.emit),
-            ("SVG", self.export_svg_clicked.emit),
-        )
-        for label, handler in export_actions:
-            action = QAction(label, export_menu)
-            action.triggered.connect(handler)
-            export_menu.addAction(action)
-
-        export_menu.addSeparator()
-        all_pages_menu = export_menu.addMenu("Export All Pages")
-        all_pages_actions = (
-            ("PNG", "png"),
-            ("PNG (Transparent)", "png_transparent"),
-            ("JPG", "jpg"),
-            ("PDF", "pdf"),
-            ("SVG", "svg"),
-        )
-        for label, fmt in all_pages_actions:
-            action = QAction(label, all_pages_menu)
-            action.triggered.connect(lambda _checked=False, f=fmt: self.export_all_pages_clicked.emit(f))
-            all_pages_menu.addAction(action)
-
-        btn_export.setMenu(export_menu)
+        btn_export.clicked.connect(self.export_clicked.emit)
 
         export_shadow = QGraphicsDropShadowEffect(btn_export)
         export_shadow.setBlurRadius(16)
