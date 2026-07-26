@@ -43,6 +43,7 @@ class TopNavbar(QWidget):
         btn_back = QPushButton(icons.icon("fa5s.arrow-left", color=theme.TEXT_ON_ACCENT), "Back")
         btn_back.setObjectName("backButton")
         btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_back.setIconSize(QSize(12, 12))
         btn_back.clicked.connect(self.back_clicked.emit)
         layout.addWidget(btn_back)
 
@@ -67,6 +68,7 @@ class TopNavbar(QWidget):
         btn_export = QPushButton(icons.icon("fa5s.file-export", color=theme.TEXT_ON_ACCENT), "Export")
         btn_export.setObjectName("exportButton")
         btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_export.setIconSize(QSize(13, 13))
         btn_export.clicked.connect(self.export_clicked.emit)
 
         export_shadow = QGraphicsDropShadowEffect(btn_export)

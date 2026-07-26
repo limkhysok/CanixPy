@@ -19,18 +19,97 @@ QLabel#placeholderText {
 }
 QToolButton#navRailButton {
     background-color: transparent;
+    /* Right border reserved (transparent) on every state, not just
+       :checked -- so switching selection only swaps its color instead of
+       nudging icon/text sideways by the border's width. Square corners
+       (no radius) so the bar reads as a crisp flush line against the
+       content panel's edge. */
     border: none;
-    border-radius: 8px;
-    padding: 10px 2px;
-    color: $TEXT_SECONDARY;
-    font-size: 10px;
+    border-right: 3px solid transparent;
+    border-radius: 0;
 }
 QToolButton#navRailButton:hover {
     background-color: $ACCENT_LIGHT;
-    color: $TEXT_PRIMARY;
 }
 QToolButton#navRailButton:checked {
-    background-color: $ACCENT_LIGHT;
+    background-color: transparent;
+    border-right: 3px solid $ACCENT;
+}
+/* The icon/text are child QLabels (see NavRailButton), and QLabel picks up
+   the app-wide QWidget white background rule by default -- harmless while
+   the button itself is white, but it shows up as a mismatched white patch
+   once the button turns $ACCENT_LIGHT on hover/checked. */
+QToolButton#navRailButton QLabel {
+    background-color: transparent;
+}
+QLabel#navRailButtonText {
+    color: $TEXT_SECONDARY;
+    font-size: 12px;
+}
+QToolButton#navRailButton:hover QLabel#navRailButtonText {
+    color: $TEXT_PRIMARY;
+}
+QToolButton#navRailButton:checked QLabel#navRailButtonText {
     color: $ACCENT_PRESSED;
     font-weight: 600;
+}
+
+/* Row-style buttons (Texts/Upload/etc. panels) -- flat rows that only pick
+   up a tint on hover/press, overriding the app-wide white-chip button
+   default so they read as menu rows instead of bordered cards. */
+LeftSidebar QPushButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 8px;
+    text-align: left;
+    color: $TEXT_PRIMARY;
+}
+LeftSidebar QPushButton:hover {
+    background-color: $ACCENT_LIGHT;
+}
+LeftSidebar QPushButton:pressed {
+    background-color: $ACCENT_LIGHT;
+}
+
+/* Upload panel's dropzone-style card -- see left_sidebar.py's
+   _build_upload_page -- overrides the plain menu-row look above with a
+   dashed, centered card so a single action doesn't look like bare text. */
+QPushButton#uploadButton {
+    border: 1.5px dashed $BORDER;
+    border-radius: 8px;
+    padding: 16px 10px;
+    text-align: center;
+    font-weight: 600;
+}
+QPushButton#uploadButton:hover {
+    background-color: $ACCENT_LIGHT;
+    border-color: $ACCENT;
+}
+LeftSidebar QToolButton {
+    background-color: transparent;
+    border: none;
+}
+LeftSidebar QToolButton:hover {
+    background-color: $ACCENT_LIGHT;
+    border-radius: 6px;
+}
+
+/* Shapes list (Elements panel) -- the app-wide QListWidget rule paints a
+   bordered white card, which stands out against this panel's own (also
+   white) background instead of reading as part of it. */
+LeftSidebar QListWidget {
+    background-color: transparent;
+    border: none;
+}
+LeftSidebar QListWidget::item {
+    background-color: transparent;
+    border-radius: 6px;
+}
+LeftSidebar QListWidget::item:hover {
+    background-color: $ACCENT_LIGHT;
+}
+LeftSidebar QListWidget::item:selected {
+    background-color: $ACCENT_LIGHT;
+    color: $TEXT_PRIMARY;
 }
