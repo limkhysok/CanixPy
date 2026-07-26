@@ -178,24 +178,33 @@ def export_all_pages(
     base_name: str = "design_page",
     dpi: int = BASELINE_DPI,
     on_progress: Callable[[int, int], bool] | None = None,
+    page_numbers: list[int] | None = None,
 ) -> list[str]:
-    """Exports every page to its own file in `directory`, named
-    "{base_name}_{n}.{ext}" in page order. Returns the written paths.
+    """Exports each of `pages` to its own file in `directory`, named
+    "{base_name}_{n}.{ext}". Returns the written paths.
+
+    `pages` doesn't have to be the document's full page list -- it can be an
+    arbitrary subset (e.g. just the ones a user checked in the Export
+    dialog). `page_numbers`, if given, supplies the `n` for each entry (so
+    filenames reflect a page's real position in the document, e.g. exporting
+    only pages 2 and 4 still writes "..._2" and "..._4", not "..._1"/"..._2");
+    it defaults to sequential numbering starting at 1.
 
     `on_progress`, if given, is called after each page as
     (pages_done, pages_total) so a caller can drive a progress dialog; it
     returns whether to keep going, so returning False (e.g. the user hit
     Cancel) stops the export early with whatever's been written so far."""
     extension, export_one, accepts_dpi = _EXPORTERS[fmt]
+    numbers = page_numbers if page_numbers is not None else list(range(1, len(pages) + 1))
     paths: list[str] = []
     total = len(pages)
-    for index, page in enumerate(pages, start=1):
-        file_path = str(Path(directory) / f"{base_name}_{index}.{extension}")
+    for done, (page, number) in enumerate(zip(pages, numbers), start=1):
+        file_path = str(Path(directory) / f"{base_name}_{number}.{extension}")
         if accepts_dpi:
             export_one(scene, file_path, page, dpi=dpi)
         else:
             export_one(scene, file_path, page)
         paths.append(file_path)
-        if on_progress is not None and not on_progress(index, total):
+        if on_progress is not None and not on_progress(done, total):
             break
     return paths

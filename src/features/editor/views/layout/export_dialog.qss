@@ -40,3 +40,38 @@ QLabel#outputPreview {
     font-size: 12px;
     padding: 0px 2px;
 }
+QLabel {
+    background-color: transparent;
+}
+QLabel#dialogTitle {
+    font-size: 18px;
+    font-weight: 600;
+    color: $TEXT_PRIMARY;
+}
+QLabel#dialogSubtitle {
+    font-size: 12px;
+    color: $TEXT_SECONDARY;
+}
+QPushButton#closeButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
+    min-height: 0px;
+}
+QPushButton#closeButton:hover {
+    background-color: $BORDER;
+}
+QPushButton#closeButton:pressed {
+    background-color: $ACCENT_LIGHT;
+}
+QFrame#footerDivider {
+    background-color: $BORDER;
+    max-height: 1px;
+    border: none;
+}
+QDialogButtonBox QPushButton {
+    min-height: 22px;
+    padding: 8px 18px;
+    font-weight: 500;
+}

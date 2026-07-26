@@ -5,7 +5,7 @@ from functools import partial
 from math import gcd
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QEnterEvent,
@@ -17,20 +17,14 @@ from PySide6.QtGui import (
     QPainterPath,
     QPaintEvent,
     QPen,
-    QPixmap,
-    QShowEvent,
 )
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QButtonGroup,
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFrame,
-    QGraphicsBlurEffect,
-    QGraphicsPixmapItem,
-    QGraphicsScene,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -43,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.core import icons, theme
+from src.core.frameless_dialog import DialogTitleBar, FramelessCardDialog
 from src.features.home.viewmodels.home_viewmodel import (
     MAX_CANVAS_PX,
     UNIT_DECIMALS,
@@ -78,8 +73,6 @@ CATEGORY_ICON_COLORS: dict[str, str] = {
 
 CATEGORY_CHIP_ICON_SIZE = 14
 
-DIALOG_CORNER_RADIUS = 16
-
 DIALOG_STYLE = theme.load_qss(Path(__file__).with_name("canvas_size_dialog.qss"))
 
 PRESET_SWATCH_MAX = 24
@@ -88,10 +81,6 @@ PRESET_ICON_BOX = 48
 PRESET_GRID_COLUMNS = 4
 PRESET_NAME_FONT_SIZE = 14
 PRESET_NAME_FONT_WEIGHT = QFont.Weight.DemiBold
-BACKDROP_BLUR_RADIUS = 18
-BACKDROP_BLUR_DOWNSCALE = 3
-BACKDROP_TINT_COLOR = "#1A1613"
-BACKDROP_TINT_ALPHA = 90
 
 
 def _swatch_size(width: int, height: int) -> tuple[int, int]:
@@ -112,75 +101,6 @@ def _aspect_ratio_text(width: int, height: int) -> str:
     if max(ratio_width, ratio_height) <= 64:
         return f"{ratio_width}:{ratio_height}"
     return f"{width / height:.2f}:1"
-
-
-def _blur_pixmap(pixmap: QPixmap, radius: float, downscale: int = 1) -> QPixmap:
-    """Gaussian-blur a pixmap via QGraphicsBlurEffect. Downscaling first is a
-    standard trick to keep a full-window blur fast -- the softness this loses
-    is invisible once blurred anyway."""
-    if pixmap.isNull():
-        return pixmap
-
-    source = pixmap
-    if downscale > 1:
-        source = pixmap.scaled(
-            max(1, pixmap.width() // downscale),
-            max(1, pixmap.height() // downscale),
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-
-    scene = QGraphicsScene()
-    item = QGraphicsPixmapItem(source)
-    effect = QGraphicsBlurEffect()
-    effect.setBlurRadius(radius)
-    item.setGraphicsEffect(effect)
-    scene.addItem(item)
-
-    blurred = QPixmap(source.size())
-    blurred.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(blurred)
-    scene.render(painter, QRectF(blurred.rect()), QRectF(source.rect()))
-    painter.end()
-
-    if downscale > 1:
-        blurred = blurred.scaled(
-            pixmap.size(),
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-    return blurred
-
-
-class _BlurBackdrop(QWidget):
-    """A blurred snapshot of the window behind the dialog, covering its
-    client area as a child overlay while the dialog is open. Stacking this
-    as a *separate top-level window* turned out to be unreliable -- Windows
-    doesn't consistently place a newly created window above an
-    already-focused one, even after raise_()/activateWindow(). Child-widget
-    stacking within the same top-level window is Qt-managed and reliable,
-    and the modal dialog itself (a real top-level window) already reliably
-    renders above its parent regardless."""
-
-    def __init__(self, source_window: QWidget) -> None:
-        super().__init__(source_window)
-        self.setGeometry(0, 0, source_window.width(), source_window.height())
-
-        blurred = _blur_pixmap(source_window.grab(), BACKDROP_BLUR_RADIUS, BACKDROP_BLUR_DOWNSCALE)
-        # The app's theme is almost entirely white/pale, so a light tint over
-        # a blurred snapshot of it washes out to a flat white void -- a dark
-        # dimming tint keeps the blurred shapes visible and gives the white
-        # dialog card something to visually stand out against.
-        tint = QColor(BACKDROP_TINT_COLOR)
-        tint.setAlpha(BACKDROP_TINT_ALPHA)
-        painter = QPainter(blurred)
-        painter.fillRect(blurred.rect(), tint)
-        painter.end()
-
-        label = QLabel(self)
-        label.setGeometry(0, 0, self.width(), self.height())
-        label.setPixmap(blurred)
-        label.setScaledContents(True)
 
 
 class _SpinField(QWidget):
@@ -486,59 +406,24 @@ class _PresetCard(QWidget):
         super().keyPressEvent(event)
 
 
-class _DialogTitleBar(QWidget):
-    """Custom replacement for the OS title bar: drag-to-move plus a close button,
-    since the dialog runs frameless (no native toolbar/title bar)."""
-
-    close_clicked = Signal()
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._drag_offset: QPoint | None = None
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.window().pos()
-            event.accept()
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.window().move(event.globalPosition().toPoint() - self._drag_offset)
-            event.accept()
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        self._drag_offset = None
-        super().mouseReleaseEvent(event)
-
-
-class CanvasSizeDialog(QDialog):
+class CanvasSizeDialog(FramelessCardDialog):
     """Lets the user pick a preset canvas size or enter a custom one before opening the editor."""
 
     def __init__(self, viewmodel: HomeViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("New Design")
-        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.FramelessWindowHint)
         self.setMinimumWidth(1100)
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(DIALOG_STYLE)
 
         self.viewmodel = viewmodel
         self._selected_size = (800, 600)
         self._preset_cards: list[_PresetCard] = []
 
-        self._backdrop: _BlurBackdrop | None = None
-        if parent is not None:
-            self._backdrop = _BlurBackdrop(parent.window())
-            self.finished.connect(self._backdrop.close)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 20, 28, 20)
         layout.setSpacing(14)
 
-        title_bar = _DialogTitleBar()
+        title_bar = DialogTitleBar()
         header = QHBoxLayout(title_bar)
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(14)
@@ -834,33 +719,3 @@ class CanvasSizeDialog(QDialog):
 
     def selected_size(self) -> tuple[int, int]:
         return self._selected_size
-
-    def showEvent(self, event: QShowEvent) -> None:
-        self._center_on_parent()
-        if self._backdrop is not None:
-            self._backdrop.show()
-            self._backdrop.raise_()
-        super().showEvent(event)
-        # The dialog's own sizeHint can grow slightly on first paint (icon
-        # fonts finishing their one-time load), so re-center once that's
-        # settled rather than leaving it slightly off from the size used above.
-        QTimer.singleShot(0, self._center_on_parent)
-
-    def _center_on_parent(self) -> None:
-        parent = self.parentWidget()
-        anchor = parent.window().frameGeometry() if parent is not None else self.screen().availableGeometry()
-        x = anchor.x() + (anchor.width() - self.width()) // 2
-        y = anchor.y() + (anchor.height() - self.height()) // 2
-        self.move(x, y)
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        # QSS border-radius doesn't reliably paint on a translucent top-level
-        # window, so the rounded card background is drawn by hand here instead.
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        path = QPainterPath()
-        path.addRoundedRect(rect, DIALOG_CORNER_RADIUS, DIALOG_CORNER_RADIUS)
-        painter.setPen(QPen(QColor(theme.BORDER), 1))
-        painter.setBrush(QColor(theme.BACKGROUND))
-        painter.drawPath(path)

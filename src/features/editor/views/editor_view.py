@@ -22,7 +22,7 @@ from src.features.editor.canvas.page import Page, page_for_item
 from src.features.editor.canvas.view import ZoomableGraphicsView
 from src.features.editor.exporter import export_all_pages, export_extension, export_page
 from src.features.editor.viewmodels.editor_viewmodel import EditorViewModel
-from src.features.editor.views.layout.export_dialog import ALL_PAGES, ExportDialog
+from src.features.editor.views.layout.export_dialog import ExportDialog
 from src.features.editor.views.layout.left_sidebar import LeftSidebar
 from src.features.editor.views.layout.page_overlay import PageOverlayManager
 from src.features.editor.views.layout.right_sidebar import PropertiesPanel
@@ -306,11 +306,11 @@ class EditorView(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        fmt, dpi, target = dialog.export_key(), dialog.dpi(), dialog.selected_page()
-        if target is ALL_PAGES:
-            self._export_all_pages(fmt, dpi)
+        fmt, dpi, pages = dialog.export_key(), dialog.dpi(), dialog.selected_pages()
+        if len(pages) == 1:
+            self._export_single_page(fmt, dpi, pages[0])
         else:
-            self._export_single_page(fmt, dpi, target)
+            self._export_pages(fmt, dpi, pages)
 
     def _export_single_page(self, fmt: str, dpi: int, page: Page) -> None:
         page_number = self.scene.pages.index(page) + 1
@@ -340,17 +340,19 @@ class EditorView(QMainWindow):
 
         self._notify_export_done(f"Exported {Path(file_path).name}", Path(file_path).parent)
 
-    def _export_all_pages(self, fmt: str, dpi: int) -> None:
-        """Exports every page in the document to its own file in a chosen
-        folder -- unlike a single-page export, which always targets exactly
-        one page picked in the dialog."""
-        directory = QFileDialog.getExistingDirectory(self, "Export All Pages To")
+    def _export_pages(self, fmt: str, dpi: int, pages: list[Page]) -> None:
+        """Exports each of `pages` (an arbitrary subset the user checked in
+        the Export dialog -- not necessarily the whole document) to its own
+        file in a chosen folder, unlike a single-page export, which targets
+        exactly one page with a normal Save As."""
+        directory = QFileDialog.getExistingDirectory(self, "Export Pages To")
         if not directory:
             return
 
-        total = len(self.scene.pages)
+        total = len(pages)
+        page_numbers = [self.scene.pages.index(page) + 1 for page in pages]
         progress = QProgressDialog("Preparing export…", "Cancel", 0, total, self)
-        progress.setWindowTitle("Export All Pages")
+        progress.setWindowTitle("Export Pages")
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.setMinimumDuration(400)
         progress.setAutoClose(False)
@@ -362,7 +364,7 @@ class EditorView(QMainWindow):
             return not progress.wasCanceled()
 
         paths = export_all_pages(
-            self.scene, self.scene.pages, directory, fmt, dpi=dpi, on_progress=report_progress
+            self.scene, pages, directory, fmt, dpi=dpi, on_progress=report_progress, page_numbers=page_numbers
         )
         progress.close()
 
