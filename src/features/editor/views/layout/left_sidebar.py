@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QMimeData, QPointF, QSize, Qt
-from PySide6.QtGui import QColor, QDrag, QFont
+from PySide6.QtGui import QColor, QDrag, QFont, QResizeEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -258,7 +258,7 @@ class LeftSidebar(QWidget):
 
             button = NavRailButton(label, icon_name)
             self._button_group.addButton(button, index)
-            button.clicked.connect(functools.partial(self.stack.setCurrentIndex, index))
+            button.clicked.connect(functools.partial(self._on_nav_clicked, index))
             rail_layout.addWidget(button)
             if label == "Elements":
                 default_button = button
@@ -268,9 +268,66 @@ class LeftSidebar(QWidget):
         root_layout.addWidget(rail)
         root_layout.addWidget(self.stack, 1)
 
+        # Chevron that collapses the panel down to just the icon rail (and
+        # back) -- reclaims canvas width without losing the current
+        # selection, since the rail's checked state is untouched by collapse.
+        # A plain child of the sidebar itself (not laid out inside the stack
+        # or any one page), positioned by hand in resizeEvent below, so it
+        # keeps floating at the top-right corner in both the expanded state
+        # (right edge of the content panel) and the collapsed one (right
+        # after the rail) without needing to live inside every page's layout.
+        self._collapsed = False
+        self._collapse_btn = QToolButton(self)
+        self._collapse_btn.setObjectName("collapseButton")
+        self._collapse_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._collapse_btn.setIconSize(QSize(10, 10))
+        # Not managed by any layout (it's positioned by hand in resizeEvent),
+        # so it never gets auto-sized to its sizeHint -- without this it
+        # keeps QWidget's bare default size of 100x30, rendering as a huge
+        # pill smashed into the corner instead of a small round button.
+        self._collapse_btn.setFixedSize(24, 24)
+        self._collapse_btn.setToolTip("Collapse panel")
+        self._collapse_btn.clicked.connect(self.toggle_collapsed)
+        self._collapse_btn.raise_()
+
         if default_button is not None:
             default_button.setChecked(True)
             self.stack.setCurrentIndex(self._button_group.id(default_button))
+
+        self._update_collapse_icon()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._reposition_collapse_button()
+
+    def _reposition_collapse_button(self) -> None:
+        # Same spot in both states -- bottom of the icon rail, in the empty
+        # space its own addStretch() reserves below the nav buttons -- so
+        # the button doesn't jump between a top-right-of-panel spot and a
+        # bottom-of-rail spot depending on collapsed state.
+        margin = 8
+        btn = self._collapse_btn
+        btn.move((RAIL_WIDTH - btn.width()) // 2, self.height() - btn.height() - margin)
+
+    def _on_nav_clicked(self, index: int) -> None:
+        self.stack.setCurrentIndex(index)
+        if self._collapsed:
+            self.toggle_collapsed()
+
+    def toggle_collapsed(self) -> None:
+        self._collapsed = not self._collapsed
+        self.stack.setVisible(not self._collapsed)
+        # Capped to exactly the rail's own width -- reserving any extra here
+        # (e.g. for the button) would leave a dead gutter past the icons,
+        # reading as the rail having grown wider once collapsed.
+        self.setMaximumWidth(RAIL_WIDTH if self._collapsed else 16777215)
+        self._reposition_collapse_button()
+        self._update_collapse_icon()
+
+    def _update_collapse_icon(self) -> None:
+        icon_name = "fa5s.chevron-right" if self._collapsed else "fa5s.chevron-left"
+        self._collapse_btn.setIcon(icons.icon(icon_name, color=theme.TEXT_SECONDARY))
+        self._collapse_btn.setToolTip("Expand panel" if self._collapsed else "Collapse panel")
 
     def _build_elements_page(self) -> QWidget:
         page = QWidget()

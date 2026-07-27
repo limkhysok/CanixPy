@@ -8,6 +8,20 @@ QWidget#navRail {
 QWidget#sidebarStack {
     background-color: $BACKGROUND;
 }
+/* Floats over the current page's top-right corner (see LeftSidebar's
+   _reposition_collapse_button) -- needs its own opaque background since it
+   sits on top of whatever content (shape tiles, text rows, ...) happens to
+   be underneath it, unlike the flat menu-row buttons below. */
+QToolButton#collapseButton {
+    background-color: $SURFACE;
+    border: 1px solid $BORDER;
+    border-radius: 11px;
+    padding: 4px;
+}
+QToolButton#collapseButton:hover {
+    background-color: $ACCENT_LIGHT;
+    border-color: $ACCENT;
+}
 QLabel#sectionHeader {
     color: $TEXT_SECONDARY;
     font-size: 11px;

@@ -49,6 +49,16 @@ RIGHT_SIDEBAR_STYLE = theme.load_qss(Path(__file__).with_name("right_sidebar.qss
 ICON_PALETTE = "fa5s.palette"
 ICON_ALIGN_LEFT = "fa5s.align-left"
 ICON_ALIGN_CENTER = "fa5s.align-center"
+ICON_ALIGN_RIGHT = "fa5s.align-right"
+ICON_BOLD = "fa5s.bold"
+
+SECTION_FONT_FAMILY = "Font Family"
+SECTION_FONT_SIZE = "Font Size"
+SECTION_TEXT_ALIGNMENT = "Text Alignment"
+
+LABEL_ALIGN_LEFT = "Align Left"
+LABEL_ALIGN_CENTER = "Align Center"
+LABEL_ALIGN_RIGHT = "Align Right"
 
 # Fixed, not left to the layout's stretch factor -- different item types
 # (image vs. text vs. shape) populate main_layout with different content, and
@@ -64,12 +74,12 @@ SECTION_ICONS = {
     "Shape Styling": ICON_PALETTE,
     "Stroke": "fa5s.pen",
     "Image": "fa5s.crop-alt",
-    "Font Family": "fa5s.font",
-    "Font Size": "fa5s.text-height",
-    "Style": "fa5s.bold",
+    SECTION_FONT_FAMILY: "fa5s.font",
+    SECTION_FONT_SIZE: "fa5s.text-height",
+    "Style": ICON_BOLD,
     "Letter Spacing": "fa5s.text-width",
     "Line Height": "fa5s.ruler-vertical",
-    "Text Alignment": ICON_ALIGN_LEFT,
+    SECTION_TEXT_ALIGNMENT: ICON_ALIGN_LEFT,
     "Arrangement": "fa5s.layer-group",
     "Distribute": "fa5s.arrows-alt-h",
     "Effects": "fa5s.magic",
@@ -250,7 +260,7 @@ class PropertiesPanel(QWidget):
             self.main_layout.addWidget(stroke_width)
 
         elif isinstance(item, QGraphicsTextItem):
-            self.main_layout.addWidget(_section_header("Font Family"))
+            self.main_layout.addWidget(_section_header(SECTION_FONT_FAMILY))
             font_box = QFontComboBox()
             font_box.setCursor(Qt.CursorShape.PointingHandCursor)
             font_box.setCurrentFont(item.font())
@@ -260,7 +270,7 @@ class PropertiesPanel(QWidget):
             font_box.currentFontChanged.connect(on_font_changed)
             self.main_layout.addWidget(font_box)
 
-            self.main_layout.addWidget(_section_header("Font Size"))
+            self.main_layout.addWidget(_section_header(SECTION_FONT_SIZE))
             size_box = QSpinBox()
             size_box.setRange(8, 120)
             size_box.setValue(item.font().pointSize())
@@ -276,7 +286,7 @@ class PropertiesPanel(QWidget):
 
             self.main_layout.addWidget(_section_header("Style"))
             font = item.font()
-            btn_bold = _toggle_button("fa5s.bold", "Bold", font.bold())
+            btn_bold = _toggle_button(ICON_BOLD, "Bold", font.bold())
             btn_italic = _toggle_button("fa5s.italic", "Italic", font.italic())
             btn_underline = _toggle_button("fa5s.underline", "Underline", font.underline())
             def on_bold_toggled(on: bool) -> None:
@@ -300,9 +310,9 @@ class PropertiesPanel(QWidget):
             letter_spacing_box.setRange(-20, 100)
             letter_spacing_box.setSuffix(" px")
             letter_spacing_box.setValue(round(get_text_letter_spacing(item)))
-            letter_spacing_box.valueChanged.connect(
-                lambda px: self.viewmodel.set_letter_spacing(item, px, self.editor_viewmodel.scene.undo_stack)
-            )
+            def on_letter_spacing_changed(px: int) -> None:
+                self.viewmodel.set_letter_spacing(item, px, self.editor_viewmodel.scene.undo_stack)
+            letter_spacing_box.valueChanged.connect(on_letter_spacing_changed)
             self.main_layout.addWidget(letter_spacing_box)
 
             self.main_layout.addWidget(_section_header("Line Height"))
@@ -310,18 +320,18 @@ class PropertiesPanel(QWidget):
             line_height_box.setRange(50, 300)
             line_height_box.setSuffix(" %")
             line_height_box.setValue(round(get_text_line_height(item)))
-            line_height_box.valueChanged.connect(
-                lambda percent: self.viewmodel.set_line_height(item, percent, self.editor_viewmodel.scene.undo_stack)
-            )
+            def on_line_height_changed(percent: int) -> None:
+                self.viewmodel.set_line_height(item, percent, self.editor_viewmodel.scene.undo_stack)
+            line_height_box.valueChanged.connect(on_line_height_changed)
             self.main_layout.addWidget(line_height_box)
 
             self.main_layout.addSpacing(8)
-            self.main_layout.addWidget(_section_header("Text Alignment"))
+            self.main_layout.addWidget(_section_header(SECTION_TEXT_ALIGNMENT))
             align_row = QHBoxLayout()
             align_options = (
-                (ICON_ALIGN_LEFT, "Align Left", Qt.AlignmentFlag.AlignLeft),
-                (ICON_ALIGN_CENTER, "Align Center", Qt.AlignmentFlag.AlignHCenter),
-                ("fa5s.align-right", "Align Right", Qt.AlignmentFlag.AlignRight),
+                (ICON_ALIGN_LEFT, LABEL_ALIGN_LEFT, Qt.AlignmentFlag.AlignLeft),
+                (ICON_ALIGN_CENTER, LABEL_ALIGN_CENTER, Qt.AlignmentFlag.AlignHCenter),
+                (ICON_ALIGN_RIGHT, LABEL_ALIGN_RIGHT, Qt.AlignmentFlag.AlignRight),
                 ("fa5s.align-justify", "Justify", Qt.AlignmentFlag.AlignJustify),
             )
             for icon_name, tooltip, alignment in align_options:
@@ -426,18 +436,22 @@ class PropertiesPanel(QWidget):
         undo_stack = self.editor_viewmodel.scene.undo_stack
         first_font = items[0].font()
 
-        self.main_layout.addWidget(_section_header("Font Family"))
+        self.main_layout.addWidget(_section_header(SECTION_FONT_FAMILY))
         font_box = QFontComboBox()
         font_box.setCursor(Qt.CursorShape.PointingHandCursor)
         font_box.setCurrentFont(first_font)
-        font_box.currentFontChanged.connect(lambda font: self.viewmodel.change_text_font_multi(items, font, undo_stack))
+        def on_font_changed(font: QFont) -> None:
+            self.viewmodel.change_text_font_multi(items, font, undo_stack)
+        font_box.currentFontChanged.connect(on_font_changed)
         self.main_layout.addWidget(font_box)
 
-        self.main_layout.addWidget(_section_header("Font Size"))
+        self.main_layout.addWidget(_section_header(SECTION_FONT_SIZE))
         size_box = QSpinBox()
         size_box.setRange(8, 120)
         size_box.setValue(first_font.pointSize())
-        size_box.valueChanged.connect(lambda size: self.viewmodel.change_text_size_multi(items, size, undo_stack))
+        def on_size_changed(size: int) -> None:
+            self.viewmodel.change_text_size_multi(items, size, undo_stack)
+        size_box.valueChanged.connect(on_size_changed)
         self.main_layout.addWidget(size_box)
 
         btn_color = _button(ICON_PALETTE, "Text Color")
@@ -445,12 +459,18 @@ class PropertiesPanel(QWidget):
         self.main_layout.addWidget(btn_color)
 
         self.main_layout.addWidget(_section_header("Style"))
-        btn_bold = _toggle_button("fa5s.bold", "Bold", first_font.bold())
+        btn_bold = _toggle_button(ICON_BOLD, "Bold", first_font.bold())
         btn_italic = _toggle_button("fa5s.italic", "Italic", first_font.italic())
         btn_underline = _toggle_button("fa5s.underline", "Underline", first_font.underline())
-        btn_bold.toggled.connect(lambda on: self.viewmodel.toggle_text_bold_multi(items, on, undo_stack))
-        btn_italic.toggled.connect(lambda on: self.viewmodel.toggle_text_italic_multi(items, on, undo_stack))
-        btn_underline.toggled.connect(lambda on: self.viewmodel.toggle_text_underline_multi(items, on, undo_stack))
+        def on_bold_toggled(on: bool) -> None:
+            self.viewmodel.toggle_text_bold_multi(items, on, undo_stack)
+        def on_italic_toggled(on: bool) -> None:
+            self.viewmodel.toggle_text_italic_multi(items, on, undo_stack)
+        def on_underline_toggled(on: bool) -> None:
+            self.viewmodel.toggle_text_underline_multi(items, on, undo_stack)
+        btn_bold.toggled.connect(on_bold_toggled)
+        btn_italic.toggled.connect(on_italic_toggled)
+        btn_underline.toggled.connect(on_underline_toggled)
         style_row = QHBoxLayout()
         style_row.addWidget(btn_bold)
         style_row.addWidget(btn_italic)
@@ -458,12 +478,12 @@ class PropertiesPanel(QWidget):
         self.main_layout.addLayout(style_row)
 
         self.main_layout.addSpacing(8)
-        self.main_layout.addWidget(_section_header("Text Alignment"))
+        self.main_layout.addWidget(_section_header(SECTION_TEXT_ALIGNMENT))
         align_row = QHBoxLayout()
         align_options = (
-            (ICON_ALIGN_LEFT, "Align Left", Qt.AlignmentFlag.AlignLeft),
-            (ICON_ALIGN_CENTER, "Align Center", Qt.AlignmentFlag.AlignHCenter),
-            ("fa5s.align-right", "Align Right", Qt.AlignmentFlag.AlignRight),
+            (ICON_ALIGN_LEFT, LABEL_ALIGN_LEFT, Qt.AlignmentFlag.AlignLeft),
+            (ICON_ALIGN_CENTER, LABEL_ALIGN_CENTER, Qt.AlignmentFlag.AlignHCenter),
+            (ICON_ALIGN_RIGHT, LABEL_ALIGN_RIGHT, Qt.AlignmentFlag.AlignRight),
             ("fa5s.align-justify", "Justify", Qt.AlignmentFlag.AlignJustify),
         )
         for icon_name, tooltip, alignment in align_options:
@@ -579,9 +599,9 @@ class PropertiesPanel(QWidget):
         blur_slider.setRange(0, 60)
         blur_slider.setValue(round(effect.blurRadius()))
         blur_slider.setCursor(Qt.CursorShape.PointingHandCursor)
-        blur_slider.valueChanged.connect(
-            lambda blur: self.viewmodel.set_shadow_blur(item, blur, self.editor_viewmodel.scene.undo_stack)
-        )
+        def on_blur_changed(blur: int) -> None:
+            self.viewmodel.set_shadow_blur(item, blur, self.editor_viewmodel.scene.undo_stack)
+        blur_slider.valueChanged.connect(on_blur_changed)
         self.main_layout.addWidget(blur_slider)
 
         offset_label = QLabel("Offset")
@@ -607,9 +627,9 @@ class PropertiesPanel(QWidget):
         label = "Align to Page" if single_item else "Align Selection"
         self.main_layout.addWidget(_section_header(label))
 
-        h_icons = {"left": ICON_ALIGN_LEFT, "h_center": ICON_ALIGN_CENTER, "right": "fa5s.align-right"}
+        h_icons = {"left": ICON_ALIGN_LEFT, "h_center": ICON_ALIGN_CENTER, "right": ICON_ALIGN_RIGHT}
         h_row = QHBoxLayout()
-        for edge, tooltip in (("left", "Align Left"), ("h_center", "Align Center"), ("right", "Align Right")):
+        for edge, tooltip in (("left", LABEL_ALIGN_LEFT), ("h_center", LABEL_ALIGN_CENTER), ("right", LABEL_ALIGN_RIGHT)):
             btn = _button(h_icons[edge], "")
             btn.setToolTip(tooltip)
             btn.clicked.connect(lambda _checked=False, e=edge: self.editor_viewmodel.scene.align_items(e))
@@ -705,7 +725,9 @@ class PropertiesPanel(QWidget):
             lock_checkbox = QCheckBox("Lock aspect ratio")
             lock_checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
             lock_checkbox.setChecked(is_aspect_locked(item))
-            lock_checkbox.toggled.connect(lambda on: set_aspect_locked(item, on))
+            def on_aspect_lock_toggled(on: bool) -> None:
+                set_aspect_locked(item, on)
+            lock_checkbox.toggled.connect(on_aspect_lock_toggled)
             self.main_layout.addWidget(lock_checkbox)
 
     def inspect_page(self, scene: DesignScene, page: Page) -> None:
