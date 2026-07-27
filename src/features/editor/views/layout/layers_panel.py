@@ -1,19 +1,28 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtGui import (
+    QAction,
+    QContextMenuEvent,
+    QEnterEvent,
+    QKeyEvent,
+    QMouseEvent,
+)
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsItemGroup,
+    QGraphicsOpacityEffect,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsTextItem,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -53,6 +62,8 @@ _ROW_HEIGHT = 30
 _ICON_SIZE = 14
 _TOGGLE_SIZE = 20
 _INDENT_STEP = 16
+_ICON_CHEVRON_DOWN = "fa5s.chevron-down"
+_ICON_CHEVRON_RIGHT = "fa5s.chevron-right"
 
 LAYERS_PANEL_STYLE = theme.load_qss(Path(__file__).with_name("layers_panel.qss"))
 
@@ -75,8 +86,7 @@ def _default_label(item: QGraphicsItem) -> str:
     if isinstance(item, QGraphicsItemGroup):
         return "Group"
     if isinstance(item, QGraphicsTextItem):
-        text = item.toPlainText().strip() or "Text"
-        return text if len(text) <= _MAX_LABEL_LEN else text[:_MAX_LABEL_LEN] + "…"
+        return item.toPlainText().strip() or "Text"
     if isinstance(item, ResizablePolygonItem):
         return item.shape_kind
     if isinstance(item, QGraphicsRectItem):
@@ -88,8 +98,44 @@ def _default_label(item: QGraphicsItem) -> str:
     return "Item"
 
 
+def _elide(text: str) -> str:
+    return text if len(text) <= _MAX_LABEL_LEN else text[:_MAX_LABEL_LEN] + "…"
+
+
 def _label_for(item: QGraphicsItem) -> str:
+    return _elide(_edit_label_for(item))
+
+
+def _edit_label_for(item: QGraphicsItem) -> str:
+    # Un-truncated, unlike _label_for -- seeding the rename box from the
+    # ellipsized display label would let a blur-triggered commit (see
+    # _RenameLineEdit) permanently shorten a text layer's name to
+    # "Lorem ipsum dolo…". Also used as the tooltip so a long custom name is
+    # never fully hidden, just abbreviated in the row.
     return get_layer_name(item) or _default_label(item)
+
+
+class _RenameLineEdit(QLineEdit):
+    """Rename field for both LayerRow and PageRow. Escape reverts to the
+    text it started with and drops focus, rather than leaving the default
+    QLineEdit behavior in place -- editingFinished fires on any blur (not
+    just Enter), so without this, hitting Escape or simply clicking
+    elsewhere while a half-typed edit is in the box would still commit it."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._original = ""
+
+    def start_editing(self, text: str) -> None:
+        self._original = text
+        self.setText(text)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.setText(self._original)
+            self.clearFocus()
+            return
+        super().keyPressEvent(event)
 
 
 class _DragHandle(QLabel):
@@ -106,17 +152,17 @@ class _DragHandle(QLabel):
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFixedWidth(_ICON_SIZE + 4)
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.row.panel.begin_drag(self.row)
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event) -> None:
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if event.buttons() & Qt.MouseButton.LeftButton:
             self.row.panel.update_drag(event.globalPosition().toPoint())
         super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event) -> None:
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.row.panel.end_drag()
         super().mouseReleaseEvent(event)
@@ -142,7 +188,9 @@ class LayerRow(QWidget):
         self.item = item
         self.panel = panel
         self.page = page
-        self.depth = depth
+        # Named nesting_depth, not depth -- QWidget inherits QPaintDevice.depth(),
+        # a bound method, so an attribute named plainly `depth` would collide with it.
+        self.nesting_depth = depth
         self.setObjectName("layerRow")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(_ROW_HEIGHT)
@@ -152,8 +200,14 @@ class LayerRow(QWidget):
         layout.setContentsMargins(6 + depth * _INDENT_STEP, 2, 4, 2)
         layout.setSpacing(6)
 
+        self._hovering = False
+        self._drag_handle: _DragHandle | None = None
+        self._drag_handle_effect: QGraphicsOpacityEffect | None = None
         if depth == 1:
-            layout.addWidget(_DragHandle(self))
+            self._drag_handle = _DragHandle(self)
+            self._drag_handle_effect = QGraphicsOpacityEffect(self._drag_handle)
+            self._drag_handle.setGraphicsEffect(self._drag_handle_effect)
+            layout.addWidget(self._drag_handle)
         else:
             spacer = QLabel()
             spacer.setFixedWidth(_ICON_SIZE + 4)
@@ -165,8 +219,8 @@ class LayerRow(QWidget):
             self.expand_btn.setObjectName("layerToggle")
             self.expand_btn.setFixedSize(_TOGGLE_SIZE, _TOGGLE_SIZE)
             self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            collapsed = item in panel._collapsed_groups
-            self.expand_btn.setIcon(icons.icon("fa5s.chevron-right" if collapsed else "fa5s.chevron-down", color=theme.TEXT_SECONDARY))
+            collapsed = panel.is_group_collapsed(item)
+            self.expand_btn.setIcon(icons.icon(_ICON_CHEVRON_RIGHT if collapsed else _ICON_CHEVRON_DOWN, color=theme.TEXT_SECONDARY))
             self.expand_btn.clicked.connect(lambda: panel.toggle_group_collapsed(item))
             layout.addWidget(self.expand_btn)
         else:
@@ -180,20 +234,32 @@ class LayerRow(QWidget):
 
         self.name_label = QLabel(_label_for(item))
         self.name_label.setObjectName("layerName")
+        self.name_label.setToolTip(_edit_label_for(item))
         layout.addWidget(self.name_label, 1)
 
-        self.name_edit = QLineEdit(_label_for(item))
+        self.name_edit = _RenameLineEdit()
         self.name_edit.setVisible(False)
         self.name_edit.editingFinished.connect(self._commit_rename)
         layout.addWidget(self.name_edit, 1)
 
         self.visible_btn = self._toggle_button()
+        self._visible_effect = QGraphicsOpacityEffect(self.visible_btn)
+        self.visible_btn.setGraphicsEffect(self._visible_effect)
         self.visible_btn.clicked.connect(self._toggle_visible)
         layout.addWidget(self.visible_btn)
 
         self.lock_btn = self._toggle_button()
+        self._lock_effect = QGraphicsOpacityEffect(self.lock_btn)
+        self.lock_btn.setGraphicsEffect(self._lock_effect)
         self.lock_btn.clicked.connect(self._toggle_lock)
         layout.addWidget(self.lock_btn)
+
+        # Always attached (rather than added lazily in _refresh_row_state), like the
+        # handle/visible/lock effects above -- opacity 1.0 is visually identical to no
+        # effect, and this sidesteps setGraphicsEffect(None), which the PySide6 stubs
+        # don't type as accepted even though Qt allows it at runtime.
+        self._row_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._row_effect)
 
         self._refresh_toggle_icons()
 
@@ -212,27 +278,117 @@ class LayerRow(QWidget):
         locked = is_layer_locked(self.item)
         self.lock_btn.setIcon(icons.icon("fa5s.lock" if locked else "fa5s.unlock", color=theme.TEXT_SECONDARY))
         self.lock_btn.setToolTip("Unlock layer" if locked else "Lock layer")
+        self._refresh_row_state(locked=locked, hidden=not visible)
+        self._refresh_hover_opacity()
+
+    def enterEvent(self, event: QEnterEvent) -> None:
+        self._hovering = True
+        self._refresh_hover_opacity()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QEvent) -> None:
+        self._hovering = False
+        self._refresh_hover_opacity()
+        super().leaveEvent(event)
+
+    def _refresh_hover_opacity(self) -> None:
+        # Reveal-on-hover keeps a row in its default state (visible,
+        # unlocked) uncluttered -- the drag handle and the eye/lock buttons
+        # only hold permanent screen space once they represent a
+        # *non-default* state (hidden or locked) worth noticing at a glance
+        # without hovering every row.
+        if self._drag_handle_effect is not None:
+            self._drag_handle_effect.setOpacity(1.0 if self._hovering else 0.0)
+        visible = self.item.isVisible()
+        locked = is_layer_locked(self.item)
+        self._visible_effect.setOpacity(1.0 if self._hovering or not visible else 0.0)
+        self._lock_effect.setOpacity(1.0 if self._hovering or locked else 0.0)
+
+    def _refresh_row_state(self, *, locked: bool, hidden: bool) -> None:
+        # Locked items lose ItemIsSelectable everywhere (see
+        # items.set_layer_locked), so clicking this row's mousePressEvent is
+        # already a no-op for them -- without a visible cue, that no-op
+        # looks like the panel is broken. Hidden items stay selectable, so
+        # only the dimming (not the cursor/tooltip) applies to them. The
+        # drag handle and the visible/lock buttons set their own cursor, so
+        # this doesn't affect those still-functional child widgets.
+        self.setCursor(Qt.CursorShape.ForbiddenCursor if locked else Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Locked -- unlock to select" if locked else "")
+        self._row_effect.setOpacity(0.5 if locked or hidden else 1.0)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        menu = QMenu(self)
+
+        duplicate_action = QAction(icons.icon("fa5s.clone", color=theme.TEXT_PRIMARY), "Duplicate", menu)
+        duplicate_action.triggered.connect(lambda: self.panel.viewmodel.duplicate_items([self.item]))
+        menu.addAction(duplicate_action)
+
+        locked = is_layer_locked(self.item)
+        lock_action = QAction(
+            icons.icon("fa5s.unlock" if locked else "fa5s.lock", color=theme.TEXT_PRIMARY),
+            "Unlock" if locked else "Lock",
+            menu,
+        )
+        lock_action.triggered.connect(self._toggle_lock)
+        menu.addAction(lock_action)
+
+        if self.nesting_depth == 1:
+            # z-order is scene-global, but a group child's z-value is local
+            # to its parent group -- mixing the two would produce a
+            # meaningless jump, so these actions match the drag-to-reorder
+            # restriction (see LayersPanel.begin_drag) and only apply to
+            # items sitting directly on a page.
+            menu.addSeparator()
+            scene = self.panel.viewmodel.scene
+            front_action = QAction(icons.icon("fa5s.arrow-up", color=theme.TEXT_PRIMARY), "Bring to Front", menu)
+            front_action.triggered.connect(lambda: scene.bring_to_front(self.item))
+            menu.addAction(front_action)
+
+            forward_action = QAction(icons.icon("fa5s.chevron-up", color=theme.TEXT_PRIMARY), "Bring Forward", menu)
+            forward_action.triggered.connect(lambda: scene.step_forward([self.item]))
+            menu.addAction(forward_action)
+
+            backward_action = QAction(icons.icon(_ICON_CHEVRON_DOWN, color=theme.TEXT_PRIMARY), "Send Backward", menu)
+            backward_action.triggered.connect(lambda: scene.step_backward([self.item]))
+            menu.addAction(backward_action)
+
+            back_action = QAction(icons.icon("fa5s.arrow-down", color=theme.TEXT_PRIMARY), "Send to Back", menu)
+            back_action.triggered.connect(lambda: scene.send_to_back(self.item))
+            menu.addAction(back_action)
+
+        menu.addSeparator()
+        delete_action = QAction(icons.icon("fa5s.trash-alt", color=theme.TEXT_PRIMARY), "Delete", menu)
+        delete_action.triggered.connect(lambda: self.panel.viewmodel.scene.delete_items([self.item]))
+        menu.addAction(delete_action)
+
+        menu.exec(event.globalPos())
 
     def set_selected(self, selected: bool) -> None:
         self.setProperty("selected", selected)
+        font = self.name_label.font()
+        font.setBold(selected)
+        self.name_label.setFont(font)
         style = self.style()
         style.unpolish(self)
         style.polish(self)
 
     def refresh_label(self) -> None:
         self.name_label.setText(_label_for(self.item))
+        self.name_label.setToolTip(_edit_label_for(self.item))
 
-    def mousePressEvent(self, event) -> None:
-        toggle = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-        self.panel.select_item(self.item, toggle=toggle)
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        modifiers = event.modifiers()
+        toggle = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        range_select = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        self.panel.select_item(self.item, toggle=toggle, range_select=range_select)
         super().mousePressEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         self._start_rename()
         super().mouseDoubleClickEvent(event)
 
     def _start_rename(self) -> None:
-        self.name_edit.setText(self.name_label.text())
+        self.name_edit.start_editing(_edit_label_for(self.item))
         self.name_label.setVisible(False)
         self.name_edit.setVisible(True)
         self.name_edit.setFocus()
@@ -296,7 +452,7 @@ class PageRow(QWidget):
         self.name_label.setFont(bold_font)
         layout.addWidget(self.name_label, 1)
 
-        self.name_edit = QLineEdit()
+        self.name_edit = _RenameLineEdit()
         self.name_edit.setVisible(False)
         self.name_edit.editingFinished.connect(self._commit_rename)
         layout.addWidget(self.name_edit, 1)
@@ -304,13 +460,18 @@ class PageRow(QWidget):
         self.refresh_label()
         self._refresh_expand_icon()
 
-    def refresh_label(self) -> None:
+    def _full_name(self) -> str:
         index = self.panel.viewmodel.scene.pages.index(self.page)
-        self.name_label.setText(self.page.name or f"Page {index + 1}")
+        return self.page.name or f"Page {index + 1}"
+
+    def refresh_label(self) -> None:
+        full_name = self._full_name()
+        self.name_label.setText(_elide(full_name))
+        self.name_label.setToolTip(full_name)
 
     def _refresh_expand_icon(self) -> None:
-        collapsed = self.page in self.panel._collapsed_pages
-        self.expand_btn.setIcon(icons.icon("fa5s.chevron-right" if collapsed else "fa5s.chevron-down", color=theme.TEXT_SECONDARY))
+        collapsed = self.panel.is_page_collapsed(self.page)
+        self.expand_btn.setIcon(icons.icon(_ICON_CHEVRON_RIGHT if collapsed else _ICON_CHEVRON_DOWN, color=theme.TEXT_SECONDARY))
 
     def set_active(self, active: bool) -> None:
         self.setProperty("selected", active)
@@ -318,16 +479,16 @@ class PageRow(QWidget):
         style.unpolish(self)
         style.polish(self)
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         self.panel.activate_page(self.page)
         super().mousePressEvent(event)
 
-    def mouseDoubleClickEvent(self, event) -> None:
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         self._start_rename()
         super().mouseDoubleClickEvent(event)
 
     def _start_rename(self) -> None:
-        self.name_edit.setText(self.name_label.text())
+        self.name_edit.start_editing(self._full_name())
         self.name_label.setVisible(False)
         self.name_edit.setVisible(True)
         self.name_edit.setFocus()
@@ -359,6 +520,7 @@ class LayersPanel(QWidget):
         self._collapsed_groups: set[QGraphicsItem] = set()
         self._dragging_row: LayerRow | None = None
         self._drag_subtree: list[LayerRow] = []
+        self._range_anchor: QGraphicsItem | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -377,7 +539,7 @@ class LayersPanel(QWidget):
         self.scroll_area.setWidget(self.rows_container)
         layout.addWidget(self.scroll_area, 1)
 
-        self.empty_hint = QLabel("Nothing in this project yet — drag a shape onto the canvas.")
+        self.empty_hint = QLabel("Nothing in this project yet — add a shape, text, or image to get started.")
         self.empty_hint.setObjectName("hintText")
         self.empty_hint.setWordWrap(True)
         layout.addWidget(self.empty_hint)
@@ -390,7 +552,12 @@ class LayersPanel(QWidget):
         # top-level rows (they're added as nested rows in refresh() instead).
         items = [
             i for i in scene.items()
-            if i not in frames and i.parentItem() is None and page_for_item(scene.pages, i) is page
+            # The PySide6 stub types parentItem() as always returning QGraphicsItem,
+            # but top-level items really do return None at runtime -- cast so the
+            # comparison below isn't flagged as always-false.
+            if i not in frames
+            and cast("QGraphicsItem | None", i.parentItem()) is None
+            and page_for_item(scene.pages, i) is page
         ]
         items.sort(key=lambda i: i.zValue(), reverse=True)
         return items
@@ -426,6 +593,12 @@ class LayersPanel(QWidget):
             for child in children:
                 self._add_item_row(child, page, depth + 1)
 
+    def is_page_collapsed(self, page: Page) -> bool:
+        return page in self._collapsed_pages
+
+    def is_group_collapsed(self, item: QGraphicsItem) -> bool:
+        return item in self._collapsed_groups
+
     def toggle_page_collapsed(self, page: Page) -> None:
         if page in self._collapsed_pages:
             self._collapsed_pages.discard(page)
@@ -452,14 +625,34 @@ class LayersPanel(QWidget):
         for page, row in self._page_rows.items():
             row.set_active(page is active_page)
 
-    def select_item(self, item: QGraphicsItem, toggle: bool) -> None:
+    def select_item(self, item: QGraphicsItem, *, toggle: bool = False, range_select: bool = False) -> None:
         if is_layer_locked(item):
+            return
+        if range_select and self._range_anchor is not None:
+            self._select_range(self._range_anchor, item)
             return
         if toggle:
             item.setSelected(not item.isSelected())
         else:
             self.viewmodel.scene.clearSelection()
             item.setSelected(True)
+        # Shift+click extends from the last plain/Ctrl click, Explorer-style
+        # -- a range-select itself doesn't move the anchor, so repeated
+        # Shift+clicks keep extending/shrinking from the same start point.
+        self._range_anchor = item
+
+    def _select_range(self, anchor: QGraphicsItem, target: QGraphicsItem) -> None:
+        # Rebuilt fresh by refresh() after every mutation (including drag
+        # reorder), so this always matches the current on-screen row order
+        # -- including across pages, top to bottom.
+        ordered = list(self._rows.keys())
+        if anchor not in ordered or target not in ordered:
+            return
+        start, end = sorted((ordered.index(anchor), ordered.index(target)))
+        self.viewmodel.scene.clearSelection()
+        for row_item in ordered[start : end + 1]:
+            if not is_layer_locked(row_item):
+                row_item.setSelected(True)
 
     # -- drag-to-reorder (see _DragHandle) ---------------------------------
     # Only depth-1 rows (items sitting directly on a page) are draggable,
@@ -469,7 +662,10 @@ class LayersPanel(QWidget):
     # immediately following it) ride along as one block so the tree doesn't
     # visually separate a group from its own children mid-drag.
     def begin_drag(self, row: LayerRow) -> None:
-        if row.depth != 1:
+        # A locked item can't be moved on canvas either (ItemIsMovable is
+        # cleared -- see items.set_layer_locked), so letting its z-order
+        # change via panel drag would be an inconsistent backdoor.
+        if row.nesting_depth != 1 or is_layer_locked(row.item):
             return
         self._dragging_row = row
         self._drag_subtree = self._subtree_widgets(row)
@@ -481,12 +677,12 @@ class LayersPanel(QWidget):
         count = self.rows_layout.count() - 1  # exclude trailing stretch
         for i in range(index + 1, count):
             widget = self.rows_layout.itemAt(i).widget()
-            if not isinstance(widget, LayerRow) or widget.depth <= row.depth:
+            if not isinstance(widget, LayerRow) or widget.nesting_depth <= row.nesting_depth:
                 break
             widgets.append(widget)
         return widgets
 
-    def update_drag(self, global_pos) -> None:
+    def update_drag(self, global_pos: QPoint) -> None:
         row = self._dragging_row
         if row is None:
             return
@@ -508,7 +704,7 @@ class LayersPanel(QWidget):
             widget = self.rows_layout.itemAt(i).widget()
             if id(widget) in dragged_ids:
                 continue
-            if not (isinstance(widget, LayerRow) and widget.depth == 1 and widget.page is row.page):
+            if not (isinstance(widget, LayerRow) and widget.nesting_depth == 1 and widget.page is row.page):
                 continue
             midpoint = widget.geometry().y() + widget.geometry().height() / 2
             if y < midpoint:
@@ -527,7 +723,7 @@ class LayersPanel(QWidget):
             widget.item
             for i in range(self.rows_layout.count() - 1)
             if isinstance(widget := self.rows_layout.itemAt(i).widget(), LayerRow)
-            and widget.depth == 1 and widget.page is row.page
+            and widget.nesting_depth == 1 and widget.page is row.page
         ]
         self._apply_new_order(row.page, new_order)
 

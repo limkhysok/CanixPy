@@ -6,6 +6,14 @@ QWidget#pageRow[selected="true"] {
     background-color: $ACCENT_LIGHT;
     border-radius: 6px;
 }
+QWidget#layerRow:hover {
+    background-color: $ACCENT_LIGHT;
+    border-radius: 6px;
+}
+QWidget#pageRow:hover {
+    background-color: $ACCENT_LIGHT;
+    border-radius: 6px;
+}
 QLabel#layerName {
     color: $TEXT_PRIMARY;
 }
