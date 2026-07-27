@@ -2,6 +2,8 @@
 
 An open-source, lightweight alternative to Canvas built entirely in PyQt.
 
+![CanixPy screenshot](images/app.png)
+
 ---
 
 ## 🎯 Purpose of the Project
