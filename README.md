@@ -1,6 +1,6 @@
 # CanixPy
 
-An open-source, lightweight alternative to Canvas built entirely in PyQt.
+An open-source, lightweight alternative to Canvas built entirely in PySide6.
 
 ![CanixPy screenshot](images/app.png)
 
