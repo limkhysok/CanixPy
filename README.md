@@ -15,7 +15,7 @@ Instead of waiting for heavy browser engines to load, managing cloud accounts, o
 ### Key Pillars
 * **Zero Overhead:** No backend, no server setups, and no web-browser bloat. Just pure, native desktop execution.
 * **Instant Utility:** Double-click, drop an image or layout onto the canvas, edit quickly, and export.
-* **Extremely Low Resource Footprint:** Leverages C++ under the hood via Qt/PyQt to deliver smooth rendering and precise control while keeping RAM and CPU usage exceptionally low.
+* **Extremely Low Resource Footprint:** Leverages C++ under the hood via Qt/PySide6 to deliver smooth rendering and precise control while keeping RAM and CPU usage exceptionally low.
 
 ---
 
@@ -32,4 +32,4 @@ python -m src.main
 
 ## ⚖️ License
 
-This project is licensed under the **GNU General Public License v3.0** (GPL-3.0) to align with the open-source PyQt ecosystem while keeping this tool free and accessible for everyone.
+This project is licensed under the **GNU General Public License v3.0** (GPL-3.0) to align with the open-source PySide ecosystem while keeping this tool free and accessible for everyone.
